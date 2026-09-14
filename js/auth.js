@@ -2,6 +2,7 @@ function getRandomWord(){
 return randomWords[Math.floor(Math.random()*randomWords.length)];
 }
 var authSubmitBusy=false;
+window.authSubmitBusy=false;
 var BLOCKED_USERNAME_TERMS=["sex","porn","xxx","fuck","nude","naked","boobs","dick","penis","vagina","pussy","cum","horny","escort","fetish","milf","anal","erotic","hentai","slut","whore","rape"];
 function isUsernameAllowed(name){
 var lower=name.toLowerCase().replace(/[^a-z0-9]/g,"");
@@ -11,6 +12,8 @@ if(lower.indexOf(BLOCKED_USERNAME_TERMS[i])!==-1)return false;
 return true;
 }
 function setAuthButtonsBusy(kind,busy,busyText,idleText){
+authSubmitBusy=!!busy;
+window.authSubmitBusy=!!busy;
 var hidden=kind==="login"?loginButton:signUpButton;
 var visible=document.getElementById(kind==="login"?"loginButtonVisible":"signUpButtonVisible");
 if(busy){
@@ -295,6 +298,7 @@ splashScreen.style.opacity="0";
 setTimeout(function(){
 splashScreen.classList.remove("active");
 splashScreen.style.display="none";
+if(typeof window.chitShowAppOpenAd==="function")window.chitShowAppOpenAd();
 },600);
 },250);
 }
@@ -442,7 +446,7 @@ var hasUnread=!!(unreadText>0||(unreadSpan&&unreadSpan.style.display!=="none"));
 nameSpan.className="user-name";
 if(hasUnread){
 nameSpan.classList.add("chat-username-unread");
-}else if(presenceData.online){
+}else if(typeof isUserActuallyOnline==="function"?isUserActuallyOnline(presenceData):presenceData.online){
 nameSpan.classList.add("chat-username-online");
 }else{
 nameSpan.classList.add("chat-username-normal");
@@ -530,26 +534,27 @@ db.ref("usernames/"+enteredUsername).set(uid);
 db.ref("users/"+uid).set({
 username: enteredUsername,
 profilePic: "icons/default.png",
-about: "Hey there!I'm using Chit Chat",
+about: "Hey there! I'm using Chit Chat",
 createdAt: Date.now(),
 lastSeen: Date.now()
 });
 db.ref("profiles/"+uid).set({
 username: enteredUsername,
-about: "Hey there!I'm using Chit Chat",
+about: "Hey there! I'm using Chit Chat",
 profilePic: "icons/default.png",
 lastUpdated: Date.now()
 });
 db.ref("presence1/"+uid).set({
 username: enteredUsername,
 online: true,
-lastSeen: Date.now()
+lastHeartbeat: Date.now()
 });
 db.ref("usernameIndex/"+enteredUsername.toLowerCase()).set(uid);
 setTimeout(function(){
 addToOnlineUsers();
 },1000);
 authSubmitBusy=false;
+setAuthButtonsBusy("signup",false,"","Create Account");
 enterMainApp(enteredUsername,true);
 })
 .catch(function(error){
@@ -585,9 +590,11 @@ setAuthButtonsBusy("login",true,"Logging in...","Login");
 // Auto-reset after 10s if Firebase hangs
 window._loginResetTimer=setTimeout(function(){
 authSubmitBusy=false;
+window.authSubmitBusy=false;
 setAuthButtonsBusy("login",false,"","Login");
+if(typeof hideAuthLoading==="function")hideAuthLoading();
 showNotification("Connection slow. Try again.");
-},10000);
+},20000);
 showAuthLoading("Logging in...");
 var email=enteredUsername.replace(/\s+/g,'_')+"@chitchat.com";
 auth.signInWithEmailAndPassword(email,enteredPassword)
@@ -608,7 +615,7 @@ if(!uSnap.exists()){
 db.ref("users/"+uid).set({
 username: enteredUsername,
 profilePic: "icons/default.png",
-about: "Hey there!I'm using Chit Chat",
+about: "Hey there! I'm using Chit Chat",
 createdAt: Date.now(),
 lastSeen: Date.now()
 });
@@ -620,7 +627,7 @@ db.ref("profiles/"+uid).once("value",function(snapshot){
 if(!snapshot.exists()){
 db.ref("profiles/"+uid).set({
 username: enteredUsername,
-about: "Hey there!I'm using Chit Chat",
+about: "Hey there! I'm using Chit Chat",
 profilePic: "icons/default.png",
 lastUpdated: Date.now()
 });
@@ -628,7 +635,7 @@ lastUpdated: Date.now()
 });
 db.ref("presence1/"+uid).update({
 online: true,
-lastSeen: Date.now(),
+lastHeartbeat: Date.now(),
 currentChat: currentOpenChatUid,
 username: enteredUsername
 });
@@ -637,6 +644,7 @@ setTimeout(function(){
 addToOnlineUsers();
 },1000);
 authSubmitBusy=false;
+setAuthButtonsBusy("login",false,"","Login");
 enterMainApp(enteredUsername,true);
 })
 .catch(function(error){
@@ -729,6 +737,8 @@ if(typeof setupConnectionStatus==="function")setupConnectionStatus();
 if(typeof setupPresence==="function")setupPresence();
 if(typeof setupGlobalPresenceManager==="function")setupGlobalPresenceManager();
 if(typeof addToOnlineUsers==="function")addToOnlineUsers();
+if(typeof window.ensureNotificationPermission==="function")window.ensureNotificationPermission();
+if(typeof window.processOutgoingQueue==="function")setTimeout(function(){window.processOutgoingQueue(true);},1200);
 // Ads / profile-change check / auto-delete now start from finishReady()
 // in chat.js, right after both the private chat list AND the group
 // unread check are done — not on their own timer here.
@@ -779,6 +789,7 @@ setTimeout(function(){okButton.focus();},0);
 okButton.onclick=function(){
 document.body.removeChild(alertBox);
 isAlertActive=false;
+if(typeof window._forceRepaint==="function")window._forceRepaint();
 if(callback)callback(true);
 if(lastFocusedElement&&document.contains(lastFocusedElement)){
 lastFocusedElement.focus();
@@ -825,6 +836,7 @@ return;
 }
 document.body.removeChild(alertBox);
 isAlertActive=false;
+if(typeof window._forceRepaint==="function")window._forceRepaint();
 callback(value);
 if(lastFocusedElement&&document.contains(lastFocusedElement)){
 lastFocusedElement.focus();
@@ -859,6 +871,7 @@ closed=true;
 document.removeEventListener("keydown",trapKeys,true);
 if(alertBox.parentNode)alertBox.parentNode.removeChild(alertBox);
 isAlertActive=false;
+if(typeof window._forceRepaint==="function")window._forceRepaint();
 callback(result);
 try{if(lastFocused&&document.contains(lastFocused))lastFocused.focus();}catch(e){}
 }
@@ -926,6 +939,7 @@ if(closed)return;
 closed=true;
 if(alertBox.parentNode)alertBox.parentNode.removeChild(alertBox);
 isAlertActive=false;
+if(typeof window._forceRepaint==="function")window._forceRepaint();
 callback(val);
 if(lastFocused&&document.contains(lastFocused))lastFocused.focus();
 }
@@ -955,24 +969,48 @@ notificationContainer.classList.remove("active");
 },3000);
 }
 function loadNotifications(){
-var notificationsRef=db.ref("notifications");
-notificationsRef.orderByChild("timestamp").limitToLast(1).on("child_added",function(snapshot){
+if(!uid)return;
+if(window._personalNotifAttached)return;
+window._personalNotifAttached=true;
+db.ref("notifications/"+uid).limitToLast(5).on("child_added",function(snapshot){
 var notificationData=snapshot.val();
-if(notificationData&&notificationData.message){
+if(!notificationData||!notificationData.message)return;
+if(notificationData.timestamp&&(Date.now()-notificationData.timestamp)>15000)return;
 showNotification(notificationData.message);
-}
 });
 }
 function navigateTo(url){
 window.location.href=url;
 }
+function ensureNotificationPermission(){
+if(typeof Notification==="undefined")return;
+if(Notification.permission==="granted"||Notification.permission==="denied")return;
+try{Notification.requestPermission();}catch(e){}
+}
+window.ensureNotificationPermission=ensureNotificationPermission;
 function sendPushNotification(message,fromUsername,chatUid){
+if(typeof Notification==="undefined")return;
 if(chatUid&&typeof isChatMuted==="function"&&isChatMuted(chatUid))return;
-if(Notification.permission==="granted"){
-new Notification("New message from "+fromUsername,{
-body: message,
-icon: 'icons/icon56x56.png'
+if(document.hidden===false&&chatPage&&chatPage.classList.contains("active")&&currentChatUid===chatUid)return;
+function show(){
+try{
+var n=new Notification(fromUsername?("New message from "+fromUsername):"New message",{
+body: message||"New message",
+icon: "icons/icon56x56.png",
+tag: chatUid||"chitchat",
+renotify: true
 });
+n.onclick=function(){
+try{window.focus();}catch(e){}
+if(chatUid&&typeof openChat==="function")openChat(chatUid);
+try{n.close();}catch(e){}
+};
+}catch(e){}
+}
+if(Notification.permission==="granted"){
+show();
+}else if(Notification.permission!=="denied"){
+Notification.requestPermission().then(function(p){if(p==="granted")show();}).catch(function(){});
 }
 }
 function showKaiAd(){

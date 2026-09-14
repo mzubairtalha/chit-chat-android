@@ -229,8 +229,20 @@ app/
 1. Unzip and serve from any static HTTP server
 2. Firebase config is in `js/config.js`
 3. For production, update `sw.js` cache version when deploying
-4. `groups.html` and `worldchat.html` must be present at the root for iframes to load
+4. `groups.html` and `world_chat.html` must be present at the root for iframes to load
 5. The app uses `localStorage` + Firebase for state — no server-side sessions
+
+## Phone: GitHub se APK banana
+
+PC nahi chahiye. GitHub Actions Cordova + AdMob APK banata hai.
+
+1. Phone pe GitHub app ya github.com kholo, naya public repo banao
+2. Ye ZIP unzip karo, saari files (`.github` folder ke sath) repo mein upload/commit karo
+3. Repo → **Actions** → **Build APK** → **Run workflow**
+4. 10–20 min baad green tick → **ChitChat-Android** artifact download
+5. APK extract karke install karo (Unknown sources allow karna hoga)
+
+AdMob ads isi Cordova APK mein chalengi. HTML-to-APK converters se real ads nahi aati.
 
 ---
 

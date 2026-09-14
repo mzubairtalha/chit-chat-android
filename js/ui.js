@@ -1,28 +1,21 @@
 var statusReplyInFlight=false;
 function addToOnlineUsers(){
-if(!uid||!username||isOnlineUserAdded)return;
-db.ref("online_users").once("value",function(snapshot){
-db.ref("profiles/"+uid).once("value",function(profileSnap){
-var profileData=profileSnap.val();
-var profilePic=profileData&&profileData.profilePic
-? profileData.profilePic
-: "icons/default.png";
-var onlineUserData={
+if(!uid||!username)return;
+var pic="icons/default.png";
+try{
+var localPic=localStorage.getItem("profilePic_"+uid);
+if(localPic&&localPic.indexOf("data:image")!==0)pic=localPic;
+}catch(e){}
+db.ref("online_users/"+uid).set({
 username: username,
 online: true,
-lastSeen: Date.now(),
+lastHeartbeat: Date.now(),
 timestamp: Date.now(),
-profilePic: profilePic,
+profilePic: pic,
 uid: uid
-};
-db.ref("online_users/"+uid).set(onlineUserData)
-.then(function(){
+}).then(function(){
 isOnlineUserAdded=true;
-})
-.catch(function(error){
-});
-});
-});
+}).catch(function(){});
 }
 function getMutedChats(){
 try{
@@ -138,9 +131,9 @@ return Object.keys(contacts).map(function(key){return contacts[key];});
 function isFreshOnlineUserRecord(data){
 if(!data)return false;
 if(data.online===false)return false;
-var lastSeen=Math.max(data.timestamp||0,data.lastSeen||0);
+var lastSeen=Math.max(data.lastHeartbeat||0,data.timestamp||0,data.lastSeen||0);
 if(!lastSeen)return false;
-return(Date.now()-lastSeen)<(5*60*1000);
+return(Date.now()-lastSeen)<70000;
 }
 function pruneStaleOnlineUsers(){
 db.ref("online_users").once("value",function(snapshot){
@@ -551,7 +544,6 @@ pendingOpenChatStatus="Online";
 showChatLoadingOverlay(username);
 setTimeout(function(){openChat(userUid);},60);
 setTimeout(function(){
-if(typeof isKnownChatContact==="function"&&isKnownChatContact(userUid))return;
 if(window._spamAllowedCache&&window._spamAllowedCache[userUid]===true)return;
 canSendMessageTo(userUid).then(function(allowed){
 if(!allowed){
@@ -850,6 +842,7 @@ connectionRef.on("value",function(snap){
 window.__fbConnected=!!(snap&&snap.val()===true);
 if(snap.val()===true){
 window.__firebaseEverConnected=true;
+if(typeof window.processOutgoingQueue==="function")setTimeout(function(){window.processOutgoingQueue(true);},400);
 if(document.hidden||window.__skipSyncBanner){
 window.__skipSyncBanner=false;
 if(connectionStatus)connectionStatus.style.display="none";
@@ -965,20 +958,20 @@ db.ref("usernames/"+enteredUsername).set(uid);
 db.ref("users/"+uid).set({
 username: enteredUsername,
 profilePic: "icons/default.png",
-about: "Hey there!I'm using Chit Chat",
+about: "Hey there! I'm using Chit Chat",
 createdAt: Date.now(),
 lastSeen: Date.now()
 });
 db.ref("profiles/"+uid).set({
 username: enteredUsername,
-about: "Hey there!I'm using Chit Chat",
+about: "Hey there! I'm using Chit Chat",
 profilePic: "icons/default.png",
 lastUpdated: Date.now()
 });
 db.ref("presence1/"+uid).set({
 username: enteredUsername,
 online: true,
-lastSeen: Date.now()
+lastHeartbeat: Date.now()
 });
 setTimeout(function(){
 addToOnlineUsers();
@@ -1057,7 +1050,7 @@ if(!uSnap.exists()){
 db.ref("users/"+uid).set({
 username: enteredUsername,
 profilePic: "icons/default.png",
-about: "Hey there!I'm using Chit Chat",
+about: "Hey there! I'm using Chit Chat",
 createdAt: Date.now(),
 lastSeen: Date.now()
 });
@@ -1069,7 +1062,7 @@ db.ref("profiles/"+uid).once("value",function(snapshot){
 if(!snapshot.exists()){
 db.ref("profiles/"+uid).set({
 username: enteredUsername,
-about: "Hey there!I'm using Chit Chat",
+about: "Hey there! I'm using Chit Chat",
 profilePic: "icons/default.png",
 lastUpdated: Date.now()
 });
@@ -1077,7 +1070,7 @@ lastUpdated: Date.now()
 });
 db.ref("presence1/"+uid).update({
 online: true,
-lastSeen: Date.now(),
+lastHeartbeat: Date.now(),
 currentChat: currentOpenChatUid,
 username: enteredUsername
 });
@@ -1293,7 +1286,7 @@ isSearching=false;
 }
 }
 function addUserToPvtList(chatUid,username){
-if(!uid||!chatUid)return;
+if(!uid||!chatUid||chatUid===uid)return;
 var updates={};
 updates["privateChats/"+uid+"/"+chatUid]={username: username||"User",lastMessage:"",timestamp: Date.now(),unreadCount: 0,online: false};
 db.ref().update(updates);
@@ -1535,7 +1528,7 @@ if(localChats[profileUid])cachedInfo=localChats[profileUid];
 }catch(e){}
 var fallbackName=(cachedInfo&&cachedInfo.username)||profileUid.substring(0,8);
 profileNameText.textContent=fallbackName;
-profileAboutText.textContent="Hey there!I'm using Chit Chat";
+profileAboutText.textContent="Hey there! I'm using Chit Chat";
 loadProfilePicture(profileUid,profileImageView,fallbackName);
 setTimeout(function(){profileImageView.focus();},150);
 db.ref("profiles/"+profileUid).once("value",function(snapshot){
@@ -1543,7 +1536,7 @@ var profileData=snapshot.val();
 var displayName=(profileData&&profileData.username)? profileData.username : fallbackName;
 profileNameText.textContent=displayName;
 loadProfilePicture(profileUid,profileImageView,displayName);
-var aboutText=(profileData&&profileData.about)? profileData.about : "Hey there!I'm using Chit Chat";
+var aboutText=(profileData&&profileData.about)? profileData.about : "Hey there! I'm using Chit Chat";
 profileAboutText.textContent=aboutText;
 }).catch(function(){});
 function openProfilePicFullscreen(){
@@ -3010,6 +3003,7 @@ overlay.style.opacity="0";
 var delay=immediate?80:260;
 setTimeout(function(){
 if(overlay.parentNode)overlay.parentNode.removeChild(overlay);
+if(typeof window._forceRepaint==="function")window._forceRepaint();
 if(onClose)onClose();
 },delay);
 }
@@ -3779,10 +3773,11 @@ if(pcc3)pcc3.scrollTop=0;
 var oul3=document.getElementById("onlineUsersList");
 if(oul3)oul3.scrollTop=0;
 }
-else focusPrivateChatsLanding();
-history.pushState({},"");
-return;
-}
+      else focusPrivateChatsLanding();
+      if(typeof window.chitShowAppOpenAd==="function")setTimeout(window.chitShowAppOpenAd,400);
+      history.pushState({},"");
+      return;
+    }
 if(statusViewContainer&&statusViewContainer.style.display==="flex"){
 hideStatusView();history.pushState({},"");return;
 }
@@ -3816,10 +3811,11 @@ var pcc4=document.getElementById("privateChatContent");
 if(pcc4)pcc4.scrollTop=0;
 var oul4=document.getElementById("onlineUsersList");
 if(oul4)oul4.scrollTop=0;
-}else{
-focusPrivateChatsLanding();
-}
-}else if(statusViewContainer&&statusViewContainer.style.display==="flex"){
+      }else{
+      focusPrivateChatsLanding();
+      }
+      if(typeof window.chitShowAppOpenAd==="function")setTimeout(window.chitShowAppOpenAd,400);
+      }else if(statusViewContainer&&statusViewContainer.style.display==="flex"){
 hideStatusView();
 }else if(statusAddContainer&&statusAddContainer.style.display==="flex"){
 hideStatusAdd();

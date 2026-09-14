@@ -306,11 +306,7 @@
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>';
     btn.addEventListener('click', function () {
       fireKey('SoftRight');
-      setTimeout(function () {
-        var cp2 = document.getElementById('chatPage'), mp2 = document.getElementById('mainPage');
-        if (cp2 && mp2 && cp2.classList.contains('active')) { cp2.classList.remove('active'); mp2.classList.add('active'); }
-        if (typeof window.androidRestoreMainLayout === 'function') window.androidRestoreMainLayout();
-      }, 80);
+      if (typeof window.chitShowAppOpenAd === 'function') setTimeout(window.chitShowAppOpenAd, 400);
     });
     header.insertBefore(btn, header.firstChild);
   }
@@ -362,12 +358,48 @@
      forces that repaint immediately instead of waiting for a tap. */
   function _forceRepaint() {
     try {
-      document.body.style.transform = 'translateZ(0)';
-      requestAnimationFrame(function () {
-        document.body.style.transform = '';
-      });
+      var b = document.body;
+      var prevDisplay = b.style.display;
+      b.style.display = 'none';
+      void b.offsetHeight; // synchronous reflow while detached from the render tree
+      b.style.display = prevDisplay || '';
+    } catch (e) {}
+    try {
+      // A tiny scroll nudge mimics the redraw a real touch/scroll triggers —
+      // this is what was actually clearing it when the user tapped the screen.
+      var sc = document.scrollingElement || document.documentElement;
+      var y = sc.scrollTop;
+      sc.scrollTop = y + 1;
+      requestAnimationFrame(function () { sc.scrollTop = y; });
     } catch (e) {}
   }
+  window._forceRepaint = _forceRepaint;
+
+  /* Root-cause fix for issue 4: any transform-animated overlay closing
+     can leave the same stale-GPU-frame "blur" behind — not just the
+     dropdown/bottom-sheet, but also every .custom-alert confirm dialog
+     (showConfirmPrompt/showCustomAlert/showCustomPrompt in auth.js —
+     which is exactly what runs for "Delete this message?" and every
+     other confirm popup). Rather than patch each closing function one by
+     one, watch the body for any of these being removed and force the
+     repaint right then — this covers every current and future call site.
+     */
+  function _watchOverlayRemovals() {
+    var SELECTOR = '.custom-alert,#andBottomSheetOverlay,#andSheetOverlay,#andSheetBg,#_authLoader,#andConfirmOverlay,#dropdownMenu';
+    var mo = new MutationObserver(function (mutations) {
+      for (var i = 0; i < mutations.length; i++) {
+        var removed = mutations[i].removedNodes;
+        for (var j = 0; j < removed.length; j++) {
+          var n = removed[j];
+          if (n.nodeType !== 1) continue;
+          if (n.matches && n.matches(SELECTOR)) { _forceRepaint(); return; }
+        }
+      }
+    });
+    mo.observe(document.body, { childList: true });
+  }
+  if (document.body) _watchOverlayRemovals();
+  else document.addEventListener('DOMContentLoaded', _watchOverlayRemovals);
 
   function addHandle(el) {
     if (el.querySelector('.and-handle')) return;
@@ -506,13 +538,17 @@
     } else if (tab === 'groups') {
       if (chatContent)   chatContent.style.display   = 'none';
       if (statusContent) statusContent.style.display = 'none';
-      /* FIX: Groups is not ready yet — show a clean "coming soon"
-         screen instead of loading groups.html. */
-      showComingSoonScreen('groups', '👥', 'Groups', 'Group chats are coming soon! Stay tuned for updates.');
+      if (gf) {
+        if (!gf.dataset.loaded) { gf.src = 'groups.html'; gf.dataset.loaded = '1'; }
+        gf.style.display = 'block';
+      }
     } else if (tab === 'worldchat') {
       if (chatContent)   chatContent.style.display   = 'none';
       if (statusContent) statusContent.style.display = 'none';
-      if (wf) { if (!wf._loaded) { wf.src = 'worldchat.html'; wf._loaded = true; } wf.style.display = 'block'; }
+      if (wf) {
+        if (!wf.dataset.loaded) { wf.src = 'world_chat.html'; wf.dataset.loaded = '1'; }
+        wf.style.display = 'block';
+      }
     } else if (tab === 'online') {
       if (statusContent) statusContent.style.display = 'none';
       if (chatContent)   chatContent.style.display   = 'block';
@@ -1271,7 +1307,11 @@
       try {
         if (!window.db || !window.uid) return;
         window.db.goOnline();
-        window.db.ref('presence1/' + window.uid).update({ online: true, lastSeen: Date.now() });
+        window.db.ref('presence1/' + window.uid).update({
+          online: true,
+          lastHeartbeat: Date.now(),
+          username: window.username || undefined
+        });
       } catch (e) {}
     }
 
@@ -1309,8 +1349,11 @@
     function startKA() {
       clearInterval(_kaTimer);
       _kaTimer = setInterval(function () {
-        try { if (window.db && window.uid) window.db.ref('presence1/' + window.uid + '/lastSeen').set(Date.now()); } catch (e) {}
-      }, 15000);
+        try {
+          if (!window.db || !window.uid) return;
+          window.db.ref('presence1/' + window.uid).update({ lastHeartbeat: Date.now(), online: true });
+        } catch (e) {}
+      }, 20000);
     }
 
     /* When app returns to foreground. visibilitychange AND focus both
@@ -1326,9 +1369,16 @@
       _fgTimer = setTimeout(function () {
         reEstablish();
         try {
-          /* Flush any queued (offline) messages the moment we're back —
-             Firebase may have reconnected before the 'online' event fired. */
           if (typeof window.processOutgoingQueue === 'function') window.processOutgoingQueue(true);
+        } catch (e) {}
+        try {
+          if (window._inboxListeners) {
+            Object.keys(window._inboxListeners).forEach(function (pid) {
+              try { window._inboxListeners[pid].off(); } catch (e) {}
+              delete window._inboxListeners[pid];
+              if (typeof attachInboxListener === 'function') attachInboxListener(pid);
+            });
+          }
         } catch (e) {}
         if (typeof window.attachLiveListenersForCurrentChat === 'function') {
           window.attachLiveListenersForCurrentChat();
@@ -1364,7 +1414,7 @@
       }, 250);
     }
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) return;
+      if (document.hidden || document.visibilityState === 'hidden') return;
       window.__skipSyncBanner = true;
       _onForeground();
     });
@@ -1376,9 +1426,7 @@
 
     /* Page focus (when user switches back) */
     window.addEventListener('focus', function () {
-      if (!document.hidden) {
-        _onForeground();
-      }
+      _onForeground();
     });
 
     /* Start keep-alive immediately */

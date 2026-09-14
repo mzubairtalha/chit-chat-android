@@ -15,11 +15,13 @@
 // worker version (this file) actually activates; bumping the version
 // number is what triggers that.
 
-var STATIC_CACHE  = 'chitchat-static-v5';
-var MEDIA_CACHE   = 'chitchat-media-v5';
+var STATIC_CACHE  = 'chitchat-static-v7';
+var MEDIA_CACHE   = 'chitchat-media-v7';
 
 var PRECACHE_FILES = [
   '/index.html',
+  '/world_chat.html',
+  '/groups.html',
   '/js/firebase-app.js',
   '/js/firebase-database.js',
   '/js/firebase-auth.js',
@@ -28,20 +30,14 @@ var PRECACHE_FILES = [
   '/js/auth.js',
   '/js/config.js',
   '/js/cloudinary.js',
-  '/js/groups.js',
-  '/js/share.js',
   '/js/android-touch.js',
   '/js/android-status.js',
   '/icons/default.png',
-  '/icons/default_grp.png',
   '/icons/profile.png',
-  '/icons/background.png',
   '/icons/bg.png',
-  '/icons/send.png',
   '/icons/icon112x112.png',
   '/icons/icon56x56.png',
-  '/notification.mp3',
-  '/manifest.webapp'
+  '/notification.mp3'
 ];
 
 // Hosts whose responses should NEVER be intercepted

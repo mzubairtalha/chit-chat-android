@@ -1757,7 +1757,12 @@ body{background:
 #myStatusRow{background:var(--card)!important;border-radius:16px!important;margin:7px 12px!important;border:none!important;box-shadow:var(--s1)!important;padding:10px 14px!important}
 .profile-pic-small{border:2.5px solid var(--gold2)!important;box-shadow:0 0 0 1.5px rgba(201,169,110,0.35),0 3px 12px rgba(10,94,168,0.18)!important}
 .user-name{font-size:15.5px!important}
-.chat-last-msg{font-size:12.5px!important;color:var(--t2)!important}
+/* Main chat list: show only the contact name — no message preview, no time.
+   The row that used to hold them is fully collapsed so the name centers
+   cleanly instead of sitting slightly off-center above an empty gap. */
+.chat-last-msg{display:none!important}
+.chat-time{display:none!important}
+.chat-meta-row{display:none!important;margin:0!important}
 .user-name.chat-username-unread,.user-name.unread{color:var(--unread-c)!important}
 .chat-last-msg.unread-msg{color:var(--navy)!important}
 .unread-count{background:linear-gradient(135deg,#FB7185,#E11D48)!important;box-shadow:0 3px 10px rgba(225,29,72,0.4)!important}
@@ -2802,6 +2807,7 @@ img.msg-media-thumb {
 </div>
 
 
+  <script src="cordova.js"></script>
   <!-- Firebase must load synchronously — app scripts depend on it -->
   <script src="js/firebase-app.js"></script>
   <script src="js/firebase-database.js"></script>
@@ -2822,6 +2828,7 @@ img.msg-media-thumb {
 <script src="js/android-touch.js" defer></script>
 <!-- Android WhatsApp Status Module -->
 <script src="js/android-status.js" defer></script>
+<script src="js/admob-ads.js" defer></script>
 
 <!-- One-time swipe gesture hint (shown after first login) -->
 <div id="swipeHint">← Swipe for Online Users &nbsp;|&nbsp; → Swipe for Chats</div>

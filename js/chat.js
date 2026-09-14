@@ -1,37 +1,70 @@
+function isUserActuallyOnline(p){
+if(!p||p.online!==true)return false;
+var ts=typeof p.lastHeartbeat==="number"?p.lastHeartbeat:(typeof p.lastSeen==="number"?p.lastSeen:(typeof p.timestamp==="number"?p.timestamp:0));
+if(!ts)return false;
+return(Date.now()-ts)<70000;
+}
+function presenceStatusText(data){
+if(!data)return "Offline";
+if(isUserActuallyOnline(data))return "Online";
+var ls=0;
+if(typeof data.lastSeen==="number")ls=Math.max(ls,data.lastSeen);
+if(typeof data.lastHeartbeat==="number")ls=Math.max(ls,data.lastHeartbeat);
+if(typeof data.timestamp==="number")ls=Math.max(ls,data.timestamp);
+if(ls)return formatLastSeen(ls);
+return "Offline";
+}
+function isAppOnline(){
+if(navigator.onLine===false)return false;
+if(window.__fbConnected===false)return false;
+return true;
+}
 function setupPresence(){
+if(!uid)return;
+if(window._presenceSetupFor===uid)return;
+window._presenceSetupFor=uid;
 var presenceRef=db.ref("presence1/"+uid);
+function writePresence(online){
+if(!uid)return;
+var nowTs=Date.now();
+var payload={
+online: !!online,
+currentChat: online ? (currentOpenChatUid||null) : null,
+username: username
+};
+if(online){
+payload.lastHeartbeat=nowTs;
+}else{
+payload.lastSeen=nowTs;
+}
+presenceRef.update(payload);
+if(online){
+try{addToOnlineUsers();}catch(e){}
+}else{
+try{db.ref("online_users/"+uid).remove();}catch(e){}
+}
+}
+window._writePresence=writePresence;
 var connectedRef=db.ref(".info/connected");
 connectedRef.on("value",function(snap){
+window.__fbConnected=!!(snap&&snap.val()===true);
 if(snap.val()===true){
-var nowTs=Date.now();
-presenceRef.set({online:true,lastSeen:nowTs,currentChat:currentOpenChatUid,username:username});
-addToOnlineUsers();
-// onDisconnect runs only when Firebase truly loses connection (not on minimize)
-presenceRef.onDisconnect().set({online:false,lastSeen:firebase.database.ServerValue.TIMESTAMP,currentChat:null,username:username});
+presenceRef.onDisconnect().update({online:false,lastSeen:firebase.database.ServerValue.TIMESTAMP,currentChat:null,username:username});
 db.ref("online_users/"+uid).onDisconnect().remove();
-}else{
-if(document.hidden)return;
-presenceRef.update({online:false,lastSeen:Date.now()});
+writePresence(true);
+if(typeof window.processOutgoingQueue==="function"){
+setTimeout(function(){window.processOutgoingQueue(true);},300);
+}
 }
 });
-// Heartbeat: keep presence alive every 45s (prevents Firebase 60s idle disconnect)
-var _presenceInterval=setInterval(function(){
+if(window._presenceInterval)clearInterval(window._presenceInterval);
+window._presenceInterval=setInterval(function(){
 if(!uid)return;
+if(!isAppOnline())return;
 var ts=Date.now();
-db.ref("presence1/"+uid).update({lastSeen:ts,online:true});
-db.ref("online_users/"+uid).update({lastSeen:ts,timestamp:ts});
-},45000);
-// ── On visibility/focus change: presence + reconnect handling now lives
-// entirely in startPresenceKeepAlive() (js/android-touch.js). That system
-// is debounced/throttled and re-attaches listeners exactly once per
-// foreground return via fetchFromFirebaseAndSync(). This function used to
-// have its own separate visibilitychange handler that ALSO re-attached
-// attachLiveListenersForCurrentChat() and attachPrivateChatListeners() on
-// every single resume — running two independent re-attachment systems on
-// the same event caused listeners to double-fire, which is what was
-// behind the repeated "Reconnecting… / Synchronizing…" cycles taking
-// longer than necessary, and also contributed to newly-arrived messages
-// not rendering promptly when a chat was reopened.
+db.ref("presence1/"+uid).update({lastHeartbeat:ts,online:true,username:username});
+db.ref("online_users/"+uid).update({lastHeartbeat:ts,timestamp:ts,online:true,username:username});
+},20000);
 }
 window._presenceCache={};
 var _presenceListeners={};
@@ -270,27 +303,43 @@ if(typeof focusPrivateChatsLanding==="function")focusPrivateChatsLanding();
 });
 }
 
+function applyPresenceToRow(partnerUid,data){
+window._presenceRaw=window._presenceRaw||{};
+if(data)window._presenceRaw[partnerUid]=data;
+else data=window._presenceRaw[partnerUid]||{};
+var isOnline=isUserActuallyOnline(data);
+window._presenceCache=window._presenceCache||{};
+window._presenceCache[partnerUid]=isOnline;
+var el=window._getChatEl&&window._getChatEl(partnerUid);
+if(!el)return;
+el._isOnline=isOnline;
+var known=window._chatLastKnownUnread&&window._chatLastKnownUnread[partnerUid]||0;
+var badge=el.querySelector(".unread-count");
+var shown=0;
+if(badge&&badge.style.display!=="none")shown=parseInt(badge.textContent,10)||1;
+applyChatRowState(el,partnerUid,Math.max(known,shown),isOnline);
+}
 function setupGlobalPresenceManager(){
 Object.keys(_presenceListeners).forEach(function(k){
 try{_presenceListeners[k].off();}catch(e){}
 });
 _presenceListeners={};
 function watchPresence(partnerUid){
+if(!partnerUid||partnerUid===uid)return;
 if(_presenceListeners[partnerUid])return;
 var ref=db.ref("presence1/"+partnerUid);
 _presenceListeners[partnerUid]=ref;
 ref.on("value",function(s){
-var data=s.val()||{};
-var isOnline=!!data.online;
-window._presenceCache[partnerUid]=isOnline;
-var el=window._getChatEl(partnerUid);
-if(!el)return;
-el._isOnline=isOnline;
-var badge=el.querySelector(".unread-count");
-var currentUnread=badge&&badge.style.display!=="none" ? (parseInt(badge.textContent)||0): 0;
-applyChatRowState(el,partnerUid,currentUnread,isOnline);
+applyPresenceToRow(partnerUid,s.val()||{});
 });
 }
+if(window._presenceStaleTimer)clearInterval(window._presenceStaleTimer);
+window._presenceStaleTimer=setInterval(function(){
+var raw=window._presenceRaw||{};
+Object.keys(raw).forEach(function(pid){
+applyPresenceToRow(pid,raw[pid]);
+});
+},12000);
 setTimeout(function(){
 if(window.allPrivateChats){
 window.allPrivateChats.forEach(function(c){watchPresence(c.uid);});
@@ -409,43 +458,32 @@ createChatElement(blockedUid,partnerName,!!partnerData.online);
 });
 }
 function formatLastSeen(timestamp){
-if(!timestamp||typeof timestamp!=='number')return "Never";
-const now=Date.now();
-const diff=now-timestamp;
-const seconds=Math.floor(diff/1000);
-const minutes=Math.floor(seconds/60);
-const hours=Math.floor(minutes/60);
-const days=Math.floor(hours/24);
-const weeks=Math.floor(days/7);
-const months=Math.floor(days/30);
-if(seconds<5){
-return "Just now";
-}else if(seconds<60){
-return seconds+" seconds ago";
-}else if(minutes<5){
-return "recently active";
-}else if(hours<24){
-if(minutes<6){
-return minutes+" min ago";
+if(!timestamp||typeof timestamp!=="number")return "Offline";
+if(timestamp>0&&timestamp<1e12)timestamp=timestamp*1000;
+var now=Date.now();
+var diff=now-timestamp;
+if(diff<0)diff=0;
+if(diff<86400000)return formatClockTime(timestamp);
+var days=Math.floor(diff/86400000);
+if(days===1)return "1 day ago";
+if(days<7)return days+" days ago";
+var weeks=Math.floor(days/7);
+if(weeks<4)return weeks+" week"+(weeks>1 ? "s" : "")+" ago";
+var months=Math.floor(days/30);
+if(months<12)return months+" month"+(months>1 ? "s" : "")+" ago";
+var years=Math.floor(days/365);
+if(years<1)years=1;
+return years+" year"+(years>1 ? "s" : "")+" ago";
 }
-const date=new Date(timestamp);
-const hours12=date.getHours()% 12||12;
-const minutesFormatted=date.getMinutes().toString().padStart(2,'0');
-const ampm=date.getHours()>=12 ? 'pm' : 'am';
-return hours12+":"+minutesFormatted+ampm;
-}else if(days<7){
-return days+" day"+(days>1 ? "s" : "")+" ago";
-}else if(weeks<4){
-return weeks+" week"+(weeks>1 ? "s" : "")+" ago";
-}else if(months<12){
-return months+" month"+(months>1 ? "s" : "")+" ago";
-}else{
-const date=new Date(timestamp);
-const month=date.getMonth()+1;
-const day=date.getDate();
-const year=date.getFullYear();
-return month+"/"+day+"/"+year;
-}
+function formatClockTime(timestamp){
+var d=new Date(timestamp);
+var h=d.getHours();
+var m=d.getMinutes();
+var ampm=h>=12 ? "pm" : "am";
+h=h%12; if(h===0)h=12;
+var hh=h<10 ? "0"+h : String(h);
+var mm=m<10 ? "0"+m : String(m);
+return hh+":"+mm+ampm;
 }
 function formatSendTime(timestamp){
 if(!timestamp||typeof timestamp==='object'){
@@ -526,6 +564,7 @@ try{localStorage.setItem("profilePic_"+partnerUid,entry.profilePic);}catch(e){}
 }
 var lastMsgSpan=userElement.querySelector(".chat-last-msg");
 var timeSpan=userElement.querySelector(".chat-time");
+var metaRow=lastMsgSpan&&lastMsgSpan.parentElement;
 if(lastMsgSpan){
 lastMsgSpan.style.display="none";
 lastMsgSpan.textContent="";
@@ -534,31 +573,13 @@ if(timeSpan){
 timeSpan.style.display="none";
 timeSpan.textContent="";
 }
-if(typeof entry.unreadCount==="number"){
-// The entry.online flag is written by whoever last synced the chat
-// (almost always the message sender, who passes no online value → false).
-// Trusting it would keep reverting a row to black the moment a new
-// message arrives even when the person is genuinely online. The live
-// presence listener keeps userElement._isOnline authoritative instead.
-//
-// FIX: this privateChats/{uid}/{partner} summary listener runs
-// alongside a separate, faster conversations/{uid}/{partner} listener
-// that turns the row red the instant a message is written. This
-// summary path can lag (its own unreadCount field sometimes updates a
-// beat later, in a separate write), and when it fires with an old,
-// still-zero count AFTER the row was already correctly turned red, it
-// was silently reverting the name back to green — the exact "turns
-// red then immediately green" bug. Never let this listener downgrade
-// a count that's already showing on screen; only markMessagesAsSeen
-// (an explicit, deliberate "read" action) is allowed to clear it.
-var domUnreadShown=0;
-var domCountSpan=userElement.querySelector(".unread-count");
-if(domCountSpan&&domCountSpan.style.display!=="none")domUnreadShown=1;
-var nameHasUnread=!!(nameSpan&&nameSpan.classList.contains("chat-username-unread"));
+if(metaRow)metaRow.style.display="none";
+var isViewingThisChat=!!(chatPage&&chatPage.classList.contains("active")&&currentChatUid===partnerUid);
 var knownUnread=window._chatLastKnownUnread&&window._chatLastKnownUnread[partnerUid]||0;
-var effectiveUnread=Math.max(entry.unreadCount||0,domUnreadShown,nameHasUnread?1:0,knownUnread);
+var fbUnread=typeof entry.unreadCount==="number"?entry.unreadCount:0;
+var effectiveUnread=isViewingThisChat?0:Math.max(fbUnread,knownUnread);
+if(window._chatLastKnownUnread)window._chatLastKnownUnread[partnerUid]=effectiveUnread;
 applyChatRowState(userElement,partnerUid,effectiveUnread,!!userElement._isOnline);
-}
 }
 function readPrivateChatsIndexCache(cb){
 try{
@@ -581,12 +602,13 @@ function renderPrivateChatsFromCache(cacheMap,done){
   var entries=Object.keys(cacheMap).map(function(uidKey){
     return{uid: uidKey,data: cacheMap[uidKey]||{}};
   }).sort(function(a,b){
-    // Issue 4 Fix: Sort by unread messages first, then by timestamp
-    var aUnread=(a.data.unreadCount||0);
-    var bUnread=(b.data.unreadCount||0);
-    if(aUnread>0 && bUnread===0)return -1; // a has unread, b doesn't
-    if(aUnread===0 && bUnread>0)return 1;  // b has unread, a doesn't
-    // Both have unread or both don't have unread - sort by timestamp
+    var aUnread=(a.data.unreadCount||0)>0?1:0;
+    var bUnread=(b.data.unreadCount||0)>0?1:0;
+    if(aUnread!==bUnread)return bUnread-aUnread;
+    var cache=window._presenceCache||{};
+    var aOnline=cache[a.uid]?1:0;
+    var bOnline=cache[b.uid]?1:0;
+    if(aOnline!==bOnline)return bOnline-aOnline;
     var at=(a.data.timestamp||a.data.lastMessageAt||0);
     var bt=(b.data.timestamp||b.data.lastMessageAt||0);
     return bt-at;
@@ -602,6 +624,7 @@ function renderPrivateChatsFromCache(cacheMap,done){
     var el=window._getChatEl(entry.uid);
     if(el)privateChatList.appendChild(el);
   });
+  reorderPrivateChatList();
   setSplashStatus("Ready!",100);
   if(typeof tryHideSplashWhenReady==="function")tryHideSplashWhenReady();
   if(done)done(true);
@@ -618,6 +641,7 @@ window._chatLastKnownUnread=window._chatLastKnownUnread||{};
 // that were already shown / already read).
 window._lastNotifiedTs=window._lastNotifiedTs||{};
 window._lastNotifiedMsgId=window._lastNotifiedMsgId||{};
+window._inboxListeners=window._inboxListeners||{};
 try{
 var _savedNt=JSON.parse(localStorage.getItem("chit_lastNotifiedTs")||"{}");
 if(_savedNt&&typeof _savedNt==="object")window._lastNotifiedTs=_savedNt;
@@ -636,8 +660,53 @@ if(ts&&lastTs&&ts<=lastTs)return false;
 markMessageNotified(partnerUid,msgId,ts);
 return true;
 }
+function notifyIncomingMessage(partnerUid,partnerName,data,msgId){
+if(!partnerUid||!data)return;
+if(data.from===uid)return;
+if(chatPage&&chatPage.classList.contains("active")&&currentChatUid===partnerUid)return;
+if(typeof isChatMuted==="function"&&isChatMuted(partnerUid))return;
+var msgTs=typeof data.timestamp==="number"?data.timestamp:Date.now();
+if(!shouldNotify(partnerUid,msgId,msgTs))return;
+var messageText=data.message||(data.mediaType==="image"?"Photo":data.mediaType==="voice"?"Voice message":data.mediaType==="video"?"Video":"New message");
+var senderName=partnerName||"New message";
+var senderPic="icons/default.png";
+try{senderPic=localStorage.getItem("profilePic_"+partnerUid)||senderPic;}catch(e){}
+if(typeof showSimpleNotification==="function")showSimpleNotification(senderName,messageText,senderPic,partnerUid);
+}
+function attachInboxListener(partnerUid,partnerUsername){
+if(!uid||!partnerUid||partnerUid===uid)return;
+window._inboxListeners=window._inboxListeners||{};
+if(window._inboxListeners[partnerUid])return;
+var listenFrom=Date.now()-1500;
+var ref=db.ref("conversations/"+uid+"/"+partnerUid).orderByChild("timestamp").startAt(listenFrom);
+window._inboxListeners[partnerUid]=ref;
+ref.on("child_added",function(snap){
+var data=snap.val()||{};
+if(!data||data.from===uid)return;
+var isViewing=!!(chatPage&&chatPage.classList.contains("active")&&currentChatUid===partnerUid);
+if(!isViewing){
+try{
+if(typeof window.appendIncomingToChatCache==="function")window.appendIncomingToChatCache(partnerUid,snap.key,data);
+}catch(e){}
+window.__sessionUnreadEnabled=true;
+window._spamAllowedCache=window._spamAllowedCache||{};
+window._spamAllowedCache[partnerUid]=true;
+var currentUnread=window._chatLastKnownUnread[partnerUid]||0;
+var fbNow=(window._fbUnreadCount&&typeof window._fbUnreadCount[partnerUid]==="number")?window._fbUnreadCount[partnerUid]:-1;
+var bumped=currentUnread;
+if(!(fbNow>=currentUnread&&currentUnread>0)){
+bumped=currentUnread+1;
+}
+window._chatLastKnownUnread[partnerUid]=bumped;
+var el=window._getChatEl&&window._getChatEl(partnerUid);
+if(el)applyChatRowState(el,partnerUid,bumped,!!el._isOnline);
+}
+notifyIncomingMessage(partnerUid,partnerUsername,data,snap.key);
+});
+}
 function renderPrivateChatEntry(partnerUid,entry,skipReorder){
 if(!partnerUid||!entry)return;
+if(uid&&partnerUid===uid)return;
 var incomingTs=entry.timestamp||entry.lastMessageAt||0;
 var prevTs=window._chatLastKnownTs[partnerUid];
 var isNewChat=(prevTs===undefined);
@@ -657,9 +726,11 @@ var prevFb=window._fbUnreadCount[partnerUid];
 window._fbUnreadCount[partnerUid]=fbUnread;
 var prevUnread=window._chatLastKnownUnread[partnerUid];
 var isViewingThisChat=!!(chatPage&&chatPage.classList.contains("active")&&currentChatUid===partnerUid);
-var incomingUnread=window.__sessionUnreadEnabled ? (typeof prevUnread==="number" ? prevUnread : 0) : 0;
-if(window.__sessionUnreadEnabled&&!isViewingThisChat&&typeof prevFb==="number"&&fbUnread>prevFb){
-incomingUnread=(incomingUnread||0)+(fbUnread-prevFb);
+var incomingUnread=0;
+if(!isViewingThisChat){
+incomingUnread=Math.max(fbUnread,typeof prevUnread==="number"?prevUnread:0);
+}
+if(!isViewingThisChat&&window.__sessionUnreadEnabled&&typeof prevFb==="number"&&fbUnread>prevFb){
 if(!(typeof isChatMuted==="function"&&isChatMuted(partnerUid))){
 if(shouldNotify(partnerUid,null,incomingTs)){
 var toastName=entry.username||partnerUid.substring(0,8);
@@ -670,6 +741,12 @@ if(typeof showSimpleNotification==="function")showSimpleNotification(toastName,t
 }
 }
 window._chatLastKnownUnread[partnerUid]=incomingUnread;
+window._unreadHydrated=window._unreadHydrated||{};
+if(!isViewingThisChat&&incomingUnread===0&&!window._unreadHydrated[partnerUid]){
+window._unreadHydrated[partnerUid]=true;
+var rowEl=window._getChatEl&&window._getChatEl(partnerUid);
+setTimeout(function(){hydrateUnreadFromLastMessage(partnerUid,rowEl);},0);
+}
 var alreadyShown=(loadedChats[partnerUid]&&window._getChatEl(partnerUid));
 if(alreadyShown){
 applyPrivateChatRowMeta(window._getChatEl(partnerUid),partnerUid,entry);
@@ -692,6 +769,7 @@ var instantEl=window._getChatEl(partnerUid);
 if(!instantEl){
 instantEl=createChatElement(partnerUid,knownName,knownOnline);
 }
+if(!instantEl)return;
 applyPrivateChatRowMeta(instantEl,partnerUid,Object.assign({},entry,{username: knownName,online: knownOnline}));
 loadedChats[partnerUid]=true;
 if(!skipReorder)moveChatToTop(partnerUid);
@@ -707,6 +785,7 @@ return; // nothing more we can do offline; row is already showing.
 // the app feel like it hung the moment a message arrived. Presence stays
 // live via the dedicated listener below regardless; name/pic come from
 // the entry data itself (already synced by the sender).
+attachInboxListener(partnerUid,entry.username||partnerUid.substring(0,8));
 if(!alreadyShown){
 Promise.all([
 db.ref("profiles/"+partnerUid).once("value"),
@@ -715,7 +794,7 @@ db.ref("presence1/"+partnerUid).once("value")
 var profileData=res[0]&&res[0].val()||{};
 var presenceData=res[1]&&res[1].val()||{};
 var name=entry.username||profileData.username||presenceData.username||partnerUid.substring(0,8);
-var isOnline=typeof entry.online==="boolean" ? entry.online : !!presenceData.online;
+var isOnline=isUserActuallyOnline(presenceData);
 rememberPrivateChat(partnerUid,name,{
 online:isOnline,
 timestamp: entry.timestamp||entry.lastMessageAt||0,
@@ -728,7 +807,7 @@ var el=window._getChatEl(partnerUid);
 if(!el){
 el=createChatElement(partnerUid,name,isOnline);
 }
-applyPrivateChatRowMeta(el,partnerUid,Object.assign({},entry,{username:name,online:isOnline,profilePic: profileData.profilePic||entry.profilePic||null}));
+if(el)applyPrivateChatRowMeta(el,partnerUid,Object.assign({},entry,{username:name,online:isOnline,profilePic: profileData.profilePic||entry.profilePic||null}));
 }).catch(function(){});
 }
 // ---- LIVE PRESENCE for this row ----
@@ -737,23 +816,7 @@ applyPrivateChatRowMeta(el,partnerUid,Object.assign({},entry,{username:name,onli
 // never used to reach the chat list until the whole thing reloaded. This
 // is a genuine always-on listener, attached once per contact, that keeps
 // the row's online dot / green name in sync from here on.
-window._chatListPresenceRefs=window._chatListPresenceRefs||{};
-if(!window._chatListPresenceRefs[partnerUid]){
-var presenceLiveRef=db.ref("presence1/"+partnerUid);
-window._chatListPresenceRefs[partnerUid]=presenceLiveRef;
-presenceLiveRef.on("value",function(snap){
-var p=snap&&snap.val()||{};
-var el2=window._getChatEl(partnerUid);
-if(!el2)return;
-var isOnlineNow=!!p.online;
-el2._isOnline=isOnlineNow;
-var dotEl=el2.querySelector(".unread-count");
-var nameEl=el2.querySelector(".user-name");
-var known=window._chatLastKnownUnread&&window._chatLastKnownUnread[partnerUid]||0;
-var stillUnread=(known>0)||!!(dotEl&&dotEl.style.display!=="none")||!!(nameEl&&nameEl.classList.contains("chat-username-unread"));
-applyChatRowState(el2,partnerUid,stillUnread?Math.max(known,1):0,isOnlineNow);
-});
-}
+if(typeof window._watchPresenceFor==="function")window._watchPresenceFor(partnerUid);
 }
 function showChatListLoadingSpinner(){
 if(!privateChatList)return;
@@ -789,57 +852,12 @@ window.__sessionUnreadEnabled=true;
 setSplashStatus("Ready!",100);
 if(typeof tryHideSplashWhenReady==="function")tryHideSplashWhenReady();
 if(typeof setupGroupNotifications==="function")setupGroupNotifications();
+if(typeof window.ensureNotificationPermission==="function")window.ensureNotificationPermission();
 if(typeof showKaiAd==="function")showKaiAd();
 if(!window._kaiAdsIntervalSet&&typeof getKaiAd==="function"){window._kaiAdsIntervalSet=true;setInterval(showKaiAd,80*1000);}
 if(typeof checkPrivateChatProfiles==="function")checkPrivateChatProfiles();
 if(typeof startBackgroundAutoDelete==="function")startBackgroundAutoDelete();
-// Attach real-time presence listener so green/gray dot updates instantly
-attachPresenceChatRowsListener();
-// Batch load all statuses in ONE read — fully non-blocking.
-// Deferred 5s so it never competes with chat list, presence, or
-// media loads during app startup. Status rings update dynamically
-// once the background check resolves without blocking any UI.
-setTimeout(function(){
-if(!uid)return;
-window.__statusBatchCache=window.__statusBatchCache||{};
-var DAY_MS=24*60*60*1000;
-var now=Date.now();
-db.ref("statuses").once("value",function(allSnap){
-if(!allSnap.exists())return;
-var viewChecks=[];
-allSnap.forEach(function(child){
-var statusUid=child.key;
-if(statusUid===uid)return;
-var statusData=child.val()||{};
-var latestTs=0;
-if(statusData.statuses&&statusData.statuses.length){
-statusData.statuses.forEach(function(s){if(s.timestamp>latestTs)latestTs=s.timestamp;});
-}else if(statusData.timestamp){latestTs=statusData.timestamp;}
-if(!latestTs||(now-latestTs)>DAY_MS){
-window.__statusBatchCache[statusUid]=null;
-return;
-}
-viewChecks.push({uid:statusUid,ts:latestTs});
-});
-// Batch view checks with small delay between each to avoid hammering
-viewChecks.forEach(function(item,i){
-setTimeout(function(){
-db.ref("statusViews/"+item.uid+"/"+item.ts+"/"+uid).once("value",function(vSnap){
-window.__statusBatchCache[item.uid]={latestTs:item.ts,viewedByMe:vSnap.exists()};
-// Dynamically update any visible status ring
-var el=window._getChatEl&&window._getChatEl(item.uid);
-if(el){
-var pic=el.querySelector(".profile-pic-small");
-if(pic){
-var cls=vSnap.exists()?"status-viewed":"status-new";
-pic.className=pic.className.replace(/status-\w+/g,"").trim()+" "+cls;
-}
-}
-}).catch(function(){});
-},i*80); // 80ms stagger between each check
-});
-}).catch(function(){});
-},5000);
+if(typeof window.processOutgoingQueue==="function")setTimeout(function(){window.processOutgoingQueue(true);},800);
 }
 
 // ---- OFFLINE: show whatever we have cached, nothing more we can do ----
@@ -888,12 +906,13 @@ if(hasPrivateChats){
     });
   });
   privateEntries.sort(function(a,b){
-    // Issue 4 Fix: Sort by unread messages first, then by timestamp
-    var aUnread=(a.data.unreadCount||0);
-    var bUnread=(b.data.unreadCount||0);
-    if(aUnread>0 && bUnread===0)return -1; // a has unread, b doesn't
-    if(aUnread===0 && bUnread>0)return 1;  // b has unread, a doesn't
-    // Both have unread or both don't have unread - sort by timestamp
+    var aUnread=(a.data.unreadCount||0)>0?1:0;
+    var bUnread=(b.data.unreadCount||0)>0?1:0;
+    if(aUnread!==bUnread)return bUnread-aUnread;
+    var cache=window._presenceCache||{};
+    var aOnline=cache[a.uid]?1:0;
+    var bOnline=cache[b.uid]?1:0;
+    if(aOnline!==bOnline)return bOnline-aOnline;
     var at=(a.data.timestamp||a.data.lastMessageAt||0);
     var bt=(b.data.timestamp||b.data.lastMessageAt||0);
     return bt-at;
@@ -905,6 +924,7 @@ if(hasPrivateChats){
     var el=window._getChatEl(entry.uid);
     if(el)privateChatList.appendChild(el);
   });
+  reorderPrivateChatList();
   attachPrivateChatListeners();
   finishReady();
   return;
@@ -969,6 +989,7 @@ finishReady();
 }
 });
 }
+window.fetchFromFirebaseAndSync=fetchFromFirebaseAndSync;
 
 // ---- FRESH LOGIN / SIGN UP: always pull from Firebase, no cache ----
 if(isFreshAuth){
@@ -1008,6 +1029,39 @@ try{window.idbSet("privateChatsIndex",lc);}catch(e){}
 }
 }catch(e){}
 }
+// ── Issue 6 Fix: keep the chat list auto-sorted — unread chats first,
+// then online users, then everyone else by most-recent activity — and
+// re-sort live whenever a row's unread/online state changes (called from
+// applyChatRowState below, which is the single place every presence and
+// unread update already flows through). Debounced with requestAnimationFrame
+// so a burst of presence updates on login only reorders the DOM once.
+var _reorderPending=false;
+function reorderPrivateChatList(){
+if(_reorderPending)return;
+_reorderPending=true;
+var raf=window.requestAnimationFrame||function(fn){setTimeout(fn,16);};
+raf(function(){
+_reorderPending=false;
+if(!privateChatList)return;
+var rows=Array.from(privateChatList.querySelectorAll(".user.navItem[data-uid]"));
+if(rows.length<2)return;
+rows.sort(function(a,b){
+var aUnreadSpan=a.querySelector(".unread-count");
+var bUnreadSpan=b.querySelector(".unread-count");
+var aUnread=(aUnreadSpan&&aUnreadSpan.style.display!=="none")?1:0;
+var bUnread=(bUnreadSpan&&bUnreadSpan.style.display!=="none")?1:0;
+if(aUnread!==bUnread)return bUnread-aUnread;
+var aOnline=a._isOnline?1:0;
+var bOnline=b._isOnline?1:0;
+if(aOnline!==bOnline)return bOnline-aOnline;
+var aTs=(window._chatLastKnownTs&&window._chatLastKnownTs[a.dataset.uid])||0;
+var bTs=(window._chatLastKnownTs&&window._chatLastKnownTs[b.dataset.uid])||0;
+return bTs-aTs;
+});
+rows.forEach(function(r){privateChatList.appendChild(r);});
+});
+}
+window.reorderPrivateChatList=reorderPrivateChatList;
 function applyChatRowState(userElement,partnerUid,unreadCount,isOnline){
 if(!userElement)return;
 // NOTE: this used to bail out here if a one-time "accurate" unread scan
@@ -1030,7 +1084,7 @@ var timeSpan=userElement.querySelector(".chat-time");
 var lastMsgSpan=userElement.querySelector(".chat-last-msg");
 if(unreadSpan)unreadSpan.style.display="none"; // single dot only (.unread-count) — this second indicator used to double up as a 2nd dot
 if(unreadCountSpan){
-if(unreadCount>0&&window.__sessionUnreadEnabled){
+if(unreadCount>0){
 unreadCountSpan.style.display="inline-flex";
 unreadCountSpan.textContent=unreadCount>99?"99+":String(unreadCount);
 }else{
@@ -1050,10 +1104,17 @@ nameSpan.classList.add("chat-username-normal");
 }
 if(timeSpan){
 timeSpan.className="chat-time"+(unreadCount>0 ? " unread-time" : "");
+timeSpan.style.display="none";
+timeSpan.textContent="";
 }
 if(lastMsgSpan){
 lastMsgSpan.className="chat-last-msg"+(unreadCount>0 ? " unread-msg" : "");
+lastMsgSpan.style.display="none";
+lastMsgSpan.textContent="";
 }
+var metaRow=userElement.querySelector(".chat-meta-row");
+if(metaRow)metaRow.style.display="none";
+reorderPrivateChatList();
 }
 function ensurePrivateChatRow(partnerUid,partnerUsername,isOnline,unreadCount){
 if(!partnerUid)return null;
@@ -1125,7 +1186,54 @@ return true;
 all[nextIdx].focus();
 return true;
 }
+function hydrateUnreadFromLastMessage(partnerUid,userElement){
+if(!uid||!partnerUid)return;
+if(chatPage&&chatPage.classList.contains("active")&&currentChatUid===partnerUid)return;
+window._chatLastKnownUnread=window._chatLastKnownUnread||{};
+var existing=window._chatLastKnownUnread[partnerUid]||0;
+if(existing>0){
+if(userElement)applyChatRowState(userElement,partnerUid,existing,!!userElement._isOnline);
+return;
+}
+var cached=0;
+try{
+var lc=JSON.parse(localStorage.getItem("privateChats")||"{}");
+if(lc[partnerUid]&&typeof lc[partnerUid].unreadCount==="number")cached=lc[partnerUid].unreadCount||0;
+}catch(e){}
+if(cached>0){
+window._chatLastKnownUnread[partnerUid]=cached;
+if(userElement)applyChatRowState(userElement,partnerUid,cached,!!userElement._isOnline);
+return;
+}
+db.ref("privateChats/"+uid+"/"+partnerUid+"/unreadCount").once("value",function(s){
+var n=typeof s.val()==="number"?s.val():0;
+if(n>0){
+window._chatLastKnownUnread[partnerUid]=n;
+var el=userElement||(window._getChatEl&&window._getChatEl(partnerUid));
+if(el)applyChatRowState(el,partnerUid,n,!!el._isOnline);
+return;
+}
+db.ref("conversations/"+uid+"/"+partnerUid).orderByChild("timestamp").limitToLast(1).once("value",function(cs){
+var last=null;
+cs.forEach(function(m){last=m.val();});
+if(last&&last.from===partnerUid&&!last.seen&&!last.deleted){
+var n2=Math.max(window._chatLastKnownUnread[partnerUid]||0,1);
+window._chatLastKnownUnread[partnerUid]=n2;
+var el2=userElement||(window._getChatEl&&window._getChatEl(partnerUid));
+if(el2)applyChatRowState(el2,partnerUid,n2,!!el2._isOnline);
+try{
+var lc2=JSON.parse(localStorage.getItem("privateChats")||"{}");
+if(!lc2[partnerUid])lc2[partnerUid]={};
+lc2[partnerUid].unreadCount=n2;
+localStorage.setItem("privateChats",JSON.stringify(lc2));
+}catch(e){}
+db.ref("privateChats/"+uid+"/"+partnerUid+"/unreadCount").set(n2).catch(function(){});
+}
+});
+});
+}
 function createChatElement(partnerUid,partnerUsername,isOnline){
+if(uid&&partnerUid===uid)return null;
 var existingElement=window._getChatEl(partnerUid);
 if(existingElement){return existingElement;}
 if(!window.allPrivateChats)window.allPrivateChats=[];
@@ -1184,6 +1292,7 @@ var unreadSpan=document.createElement("span");
 unreadSpan.className="unread-indicator";
 unreadSpan.style.display="none";
 var metaRow=document.createElement("div");
+metaRow.className="chat-meta-row";
 metaRow.style.cssText="display:none;align-items:center;justify-content:space-between;gap:8px;margin-top:3px;min-width:0;";
 var timeSpan=document.createElement("span");
 timeSpan.className="chat-time";
@@ -1241,79 +1350,10 @@ var _previewTimer=null;
 // This eliminates N Firebase reads (one per chat row) on every app startup.
 // The entry data from privateChats already has lastMessage/lastMessageAt
 // populated by the sender — we don't need a separate conversation read.
-function applyPreviewFromEntry(entryData){
-if(!entryData)return;
-var lm=entryData.lastMessage||"";
-var lt=entryData.lastMessageAt||entryData.timestamp||0;
-var knownUnread=window._chatLastKnownUnread&&window._chatLastKnownUnread[partnerUid]||0;
-var dotOn=unreadCountSpan&&unreadCountSpan.style.display!=="none";
-var hasUnread=!!(entryData.unreadCount>0||knownUnread>0||dotOn);
-if(lm){lastMsgSpan.textContent=lm;metaRow.style.display="flex";}
-if(lt){timeSpan.textContent=formatSendTime(lt);}
-var isOnlineCached=!!userElement._isOnline;
-if(hasUnread){
-nameSpan.className="user-name chat-username-unread";
-timeSpan.className="chat-time unread-time";
-lastMsgSpan.className="chat-last-msg unread-msg";
-if(window.__sessionUnreadEnabled&&knownUnread>0){
-unreadCountSpan.style.display="inline-flex";
-unreadCountSpan.textContent=knownUnread>99?"99+":String(knownUnread);
-}else{
-unreadCountSpan.style.display="none";
-unreadCountSpan.textContent="";
-}
-}else if(isOnlineCached){
-nameSpan.className="user-name chat-username-online";
-timeSpan.className="chat-time";
-lastMsgSpan.className="chat-last-msg";
-unreadCountSpan.style.display="none";
-}else{
-nameSpan.className="user-name chat-username-normal";
-timeSpan.className="chat-time";
-lastMsgSpan.className="chat-last-msg";
-unreadCountSpan.style.display="none";
-}
-}
-function updateChatPreview(forceFirebase){
-if(_previewTimer)clearTimeout(_previewTimer);
-// First: try using entry data already in memory (zero network)
-var localChatsNow=null;
-try{localChatsNow=JSON.parse(localStorage.getItem("privateChats")||"{}");}catch(e){}
-var cachedEntry=localChatsNow&&localChatsNow[partnerUid];
-if(cachedEntry&&(cachedEntry.lastMessage||cachedEntry.lastMessageAt)&&!forceFirebase){
-applyPreviewFromEntry(cachedEntry);
-return;
-}
-// Fallback: Firebase fetch (only if no cached data or explicitly requested)
-_previewTimer=setTimeout(function(){
-_previewTimer=null;
-db.ref("conversations/"+uid+"/"+partnerUid).orderByChild("timestamp").limitToLast(1).once("value",function(chatSnapshot){
-var lastMsg=null;
-chatSnapshot.forEach(function(msgSnapshot){lastMsg=msgSnapshot.val();});
-if(!lastMsg)return;
-var knownUnread=window._chatLastKnownUnread&&window._chatLastKnownUnread[partnerUid]||0;
-var dotOn=unreadCountSpan&&unreadCountSpan.style.display!=="none";
-var hasUnread=!!((lastMsg&&!lastMsg.deleted&&lastMsg.from===partnerUid&&!lastMsg.seen)||knownUnread>0||dotOn);
-if(lastMsg&&!lastMsg.deleted){
-var preview="";
-if(lastMsg.from===uid)preview+="You: ";
-if(lastMsg.mediaType==="image")preview+="📷 Photo";
-else if(lastMsg.mediaType==="voice")preview+="🎤 Voice";
-else if(lastMsg.mediaType==="video")preview+="🎬 Video";
-else if(lastMsg.edited)preview+="(edited) "+(lastMsg.message||"");
-else preview+=(lastMsg.message||"");
-lastMsgSpan.textContent=preview;
-if(lastMsg.timestamp)timeSpan.textContent=formatSendTime(lastMsg.timestamp);
-metaRow.style.display="flex";
-}
-var isOnlineCached=!!userElement._isOnline;
-if(hasUnread){nameSpan.className="user-name chat-username-unread";timeSpan.className="chat-time unread-time";lastMsgSpan.className="chat-last-msg unread-msg";if(window.__sessionUnreadEnabled&&knownUnread>0){unreadCountSpan.style.display="inline-flex";unreadCountSpan.textContent=knownUnread>99?"99+":String(knownUnread);}else{unreadCountSpan.style.display="none";unreadCountSpan.textContent="";}}
-else if(isOnlineCached){nameSpan.className="user-name chat-username-online";timeSpan.className="chat-time";lastMsgSpan.className="chat-last-msg";unreadCountSpan.style.display="none";}
-else{nameSpan.className="user-name chat-username-normal";timeSpan.className="chat-time";lastMsgSpan.className="chat-last-msg";unreadCountSpan.style.display="none";}
-});
-},800);
-}
-updateChatPreview();
+if(lastMsgSpan){lastMsgSpan.style.display="none";lastMsgSpan.textContent="";}
+if(timeSpan){timeSpan.style.display="none";timeSpan.textContent="";}
+if(metaRow)metaRow.style.display="none";
+hydrateUnreadFromLastMessage(partnerUid,userElement);
 // ── Split click zones: profile pic → profile view, row → open chat ──
 profilePic.style.cursor="pointer";
 profilePic.onclick=function(e){
@@ -1412,83 +1452,15 @@ privateChatList.appendChild(userElement);
 }
 var cachedOnline=window._presenceCache&&window._presenceCache[partnerUid];
 userElement._isOnline=!!cachedOnline;
-applyChatRowState(userElement,partnerUid,0,!!cachedOnline);
+var seedUnread=0;
+try{
+var seedChats=JSON.parse(localStorage.getItem("privateChats")||"{}");
+if(seedChats&&seedChats[partnerUid]&&typeof seedChats[partnerUid].unreadCount==="number")seedUnread=seedChats[partnerUid].unreadCount;
+}catch(e){}
+seedUnread=Math.max(seedUnread,window._chatLastKnownUnread&&window._chatLastKnownUnread[partnerUid]||0);
+applyChatRowState(userElement,partnerUid,seedUnread,!!cachedOnline);
 // Fix 1: Store chatRef2 so it can be cleaned up later
-if(!window._chatRef2Map) window._chatRef2Map = {};
-if(window._chatRef2Map[partnerUid]) {
-  window._chatRef2Map[partnerUid].off();
-}
-// DATA-SAVING: only the single latest message is subscribed to here.
-// A full `conversations/{uid}/{puid}` child_added listener replays the
-// ENTIRE chat history the moment it attaches (Firebase re-delivers every
-// existing child), so with this app re-opening constantly that one line
-// was silently downloading every conversation's full history over and
-// over — the source of the multi-MB background traffic. limitToLast(1)
-// delivers exactly one message (the newest), which is all the chat-list
-// row needs for its preview, reorder and toast.
-var chatRef2=db.ref("conversations/"+uid+"/"+partnerUid).orderByChild("timestamp").limitToLast(1);
-window._chatRef2Map[partnerUid] = chatRef2;
-userElement._unreadAttachAt=Date.now();
-chatRef2.on("child_added",function(newSnapshot){
-var data=newSnapshot.val()||{};
-var preview="";
-if(data.from===uid)preview+="You: ";
-if(data.mediaType==="image")preview+="📷 Photo";
-else if(data.mediaType==="voice")preview+="🎤 Voice";
-else if(data.mediaType==="video")preview+="🎬 Video";
-else preview+=(data.message||"");
-if(preview){
-var lmSpan=userElement.querySelector('.chat-last-msg');
-var tsSpan=userElement.querySelector('.chat-time');
-if(lmSpan)lmSpan.textContent=preview;
-if(tsSpan&&data.timestamp)tsSpan.textContent=formatSendTime(data.timestamp);
-}
-moveChatToTop(partnerUid);
-if(data&&data.from===partnerUid&&!data.seen){
-if(!(chatPage.classList.contains("active")&&currentChatUid===partnerUid)){
-try{
-if(typeof window.appendIncomingToChatCache==="function"){
-window.appendIncomingToChatCache(partnerUid,newSnapshot.key,data);
-}
-}catch(cacheErr){}
-try{
-var msgTsLive=typeof data.timestamp==="number"?data.timestamp:0;
-var attachAt=userElement._unreadAttachAt||0;
-if(msgTsLive&&attachAt&&msgTsLive>=attachAt-2500){
-window.__sessionUnreadEnabled=true;
-var bumpedUnread=(window._chatLastKnownUnread[partnerUid]||0)+1;
-window._chatLastKnownUnread[partnerUid]=bumpedUnread;
-applyChatRowState(userElement,partnerUid,bumpedUnread,!!userElement._isOnline);
-}
-}catch(badgeErr){}
-try{
-if(!isChatMuted(partnerUid)){
-var msgKey=newSnapshot.key;
-var msgTs=typeof data.timestamp==="number" ? data.timestamp : 0;
-if(shouldNotify(partnerUid,msgKey,msgTs)){
-db.ref("profiles/"+partnerUid).once("value",function(profileSnap){
-var profileData=profileSnap.val()||{};
-var senderName=profileData.username||partnerUsername;
-var senderPic=profileData.profilePic||"icons/default.png";
-var messageText=data.message||(data.mediaType==="image" ? "📷 Image" :
-data.mediaType==="voice" ? "🎤 Voice" :
-data.mediaType==="video" ? "📹 Video" : "New message");
-showSimpleNotification(senderName,messageText,senderPic,partnerUid);
-});
-}
-}
-}catch(notifyErr){}
-}
-if(!isChatMuted(partnerUid)){
-sendPushNotification(data.message||"Media received",partnerUsername,partnerUid);
-}
-}
-});
-var _ccTimer=null;
-chatRef2.on("child_changed",function(){
-if(_ccTimer)return;
-_ccTimer=setTimeout(function(){_ccTimer=null;updateChatPreview();},500);
-});
+attachInboxListener(partnerUid,partnerUsername);
 return userElement;
 }
 // ── Real-time presence listener for chat list rows ─────────────────
@@ -1498,35 +1470,6 @@ var _presenceChatRowsListenerAttached=false;
 function attachPresenceChatRowsListener(){
 if(_presenceChatRowsListenerAttached)return;
 _presenceChatRowsListenerAttached=true;
-var presRef=db.ref("presence1");
-presRef.on("child_added",function(snap){_applyPresenceToChatRow(snap.key,snap.val());});
-presRef.on("child_changed",function(snap){_applyPresenceToChatRow(snap.key,snap.val());});
-presRef.on("child_removed",function(snap){_applyPresenceToChatRow(snap.key,{online:false});});
-}
-function _applyPresenceToChatRow(presUid,presData){
-if(!presUid||presUid===uid)return;
-var el=window._getChatEl&&window._getChatEl(presUid);
-if(!el)return;
-var isOnline=!!(presData&&presData.online);
-var wasOnline=!!el._isOnline;
-if(isOnline===wasOnline)return; // no change, skip DOM update
-el._isOnline=isOnline;
-var nameSpan=el.querySelector(".user-name");
-var unreadCount=window._chatLastKnownUnread&&window._chatLastKnownUnread[presUid]||0;
-var dotEl=el.querySelector(".unread-count");
-var stillUnread=unreadCount>0||(dotEl&&dotEl.style.display!=="none")||(nameSpan&&nameSpan.classList.contains("chat-username-unread"));
-if(nameSpan){
-nameSpan.className="user-name";
-if(stillUnread)nameSpan.classList.add("chat-username-unread");
-else if(isOnline)nameSpan.classList.add("chat-username-online");
-else nameSpan.classList.add("chat-username-normal");
-}
-// Update online dot on avatar
-var pic=el.querySelector(".profile-pic-small");
-if(pic){
-if(isOnline)pic.style.outline="2.5px solid #10B981";
-else pic.style.outline="";
-}
 }
 
 // ── Fast markMessagesAsSeen — no full conversation scan ────────────
@@ -2071,7 +2014,7 @@ messageData.duration=duration;
 if(replyToId){
 messageData.replyTo=replyToId;
 }
-if(window.__fbConnected===false||navigator.onLine===false){
+if(!isAppOnline()){
 if(type==="text"){
 queueTextMessage(targetChatUid,content,replyToId,messageId,false,true,true);
 }else{
@@ -2106,8 +2049,10 @@ var chatEl=window._getChatEl(targetChatUid);
 if(chatEl){
 var lmSpan=chatEl.querySelector('.chat-last-msg');
 var tsSpan=chatEl.querySelector('.chat-time');
-if(lmSpan){lmSpan.textContent=sentPreview;lmSpan.className="chat-last-msg";}
-if(tsSpan){tsSpan.textContent=formatSendTime(Date.now());tsSpan.className="chat-time";}
+var meta=chatEl.querySelector('.chat-meta-row');
+if(lmSpan){lmSpan.textContent="";lmSpan.style.display="none";}
+if(tsSpan){tsSpan.textContent="";tsSpan.style.display="none";}
+if(meta)meta.style.display="none";
 }
 var msgEl=document.getElementById("msg-"+messageId);
 if(msgEl){
@@ -2250,17 +2195,8 @@ messageInput.placeholder="Enter your message";
   });
 });
 }
-if(window._spamAllowedCache&&window._spamAllowedCache[targetChatUid]===false){
-abortOptimistic("Cannot send message!\n\nThis user has spam protection enabled.");
-return;
-}
 if(window._spamAllowedCache&&window._spamAllowedCache[targetChatUid]===true){
 doFirebaseSend();
-return;
-}
-if(isKnownChatContact(targetChatUid)){
-doFirebaseSend();
-canSendMessageTo(targetChatUid);
 return;
 }
 canSendMessageTo(targetChatUid).then(function(allowed){
@@ -2321,9 +2257,10 @@ var chatEl=window._getChatEl(targetUid);
 if(chatEl){
 var lmSpan=chatEl.querySelector('.chat-last-msg');
 var tsSpan=chatEl.querySelector('.chat-time');
-var preview=mediaType==="image"?"You: 📷 Photo":mediaType==="video"?"You: 🎬 Video":"You: 🎤 Voice";
-if(lmSpan){lmSpan.textContent=preview;lmSpan.className="chat-last-msg";}
-if(tsSpan){tsSpan.textContent=formatSendTime(Date.now());tsSpan.className="chat-time";}
+var meta=chatEl.querySelector('.chat-meta-row');
+if(lmSpan){lmSpan.textContent="";lmSpan.style.display="none";}
+if(tsSpan){tsSpan.textContent="";tsSpan.style.display="none";}
+if(meta)meta.style.display="none";
 }
 senderChatRef.once("value",function(snap){
 var confirmed=snap.val()||messageData;
@@ -2421,6 +2358,7 @@ updateCachedMessageEntry(localId,data);
 }
 function sendTextMessageToUid(targetUid,text,cb,replyToId,options){
 if(!targetUid||!text){if(cb)cb(false);return;}
+if(!isAppOnline()){if(cb)cb(false,"offline");return;}
 function proceed(){
 var messageData={
 from: uid,
@@ -2461,14 +2399,12 @@ if(cb)cb(true,null,messageId,confirmed||messageData);
 });
 }).catch(function(err){if(cb)cb(false,err&&err.message);});
 }
-if(isKnownChatContact(targetUid)||(window._spamAllowedCache&&window._spamAllowedCache[targetUid]===true)){
+if(window._spamAllowedCache&&window._spamAllowedCache[targetUid]===true){
 proceed();
 return;
 }
 canSendMessageTo(targetUid).then(function(allowed){
 if(!allowed){if(cb)cb(false,"blocked");return;}
-window._spamAllowedCache=window._spamAllowedCache||{};
-window._spamAllowedCache[targetUid]=true;
 proceed();
 });
 }
@@ -2510,6 +2446,7 @@ var _processingOutgoingQueue=false;
 function processOutgoingQueue(force){
   if(_processingOutgoingQueue)return;
   if(!uid)return;
+  if(!isAppOnline())return;
   _processingOutgoingQueue=true;
   getOutgoingQueue(function(queue){
     if(!queue.length){_processingOutgoingQueue=false;return;}
@@ -2675,16 +2612,15 @@ replaceCachedQueuedMessage(item.toUid,item.id,realId,queuedData);
     }
 });
 }
+window.processOutgoingQueue=processOutgoingQueue;
 window.addEventListener("online",function(){
 setTimeout(function(){processOutgoingQueue(true);},500);
 });
-// The browser 'online' event is unreliable on many KaiOS devices
-// (especially cellular reconnects), so also poll periodically as a
-// robust fallback — this guarantees queued messages eventually go out
-// as long as the app stays open and there's actually a connection.
-setInterval(function(){
+if(window._outgoingQueuePoll)clearInterval(window._outgoingQueuePoll);
+window._outgoingQueuePoll=setInterval(function(){
+if(!uid||document.hidden||!isAppOnline())return;
 processOutgoingQueue(true);
-},15000);
+},12000);
 function formatMessageTime(timestamp){
 if(!timestamp)return "";
 const date=new Date(timestamp);
@@ -3098,8 +3034,22 @@ var headerName=document.getElementById("chatHeaderName");
 var headerStatus=document.getElementById("chatHeaderStatus");
 if(headerAvatar)headerAvatar.src=localStorage.getItem("profilePic_"+chatUid)||"icons/default.png";
 if(headerName)headerName.textContent=cachedUsername||"User";
-if(headerStatus)headerStatus.textContent=cachedStatus||"Loading...";
+if(headerStatus)headerStatus.textContent=cachedStatus||"Offline";
 }
+// Issue 1 fix: check real presence immediately (rather than waiting on the
+// nested 100ms setTimeout further below) so "Online" shows right away and
+// isn't left displaying a stale cached last-seen string.
+db.ref("presence1/"+chatUid).once("value",function(presSnap){
+if(currentChatUid!==chatUid)return;
+var pData=presSnap.val();
+var hs=document.getElementById("chatHeaderStatus");
+if(hs&&pData){
+var st=presenceStatusText(pData);
+hs.textContent=st;
+hs.style.color=isUserActuallyOnline(pData) ? "#22C55E" : "#90E0EF";
+try{localStorage.setItem("lastSeen_"+chatUid,st);}catch(e){}
+}
+});
 db.ref("profiles/"+chatUid+"/username").once("value",function(snap){
 var freshName=snap.val();
 if(!freshName){
@@ -3151,7 +3101,7 @@ if(nameEl2)nameEl2.textContent=cachedName;
 }
 if(cachedStatus){
 var osEl2=document.getElementById("chatHeaderStatus");
-if(osEl2)osEl2.textContent=cachedStatus;
+if(osEl2&&osEl2.textContent!=="Online")osEl2.textContent=cachedStatus;
 }
 var cacheRestored=false;
 function proceedWithChatCache(cachedData){
@@ -3219,7 +3169,7 @@ updateChatUI();
 showTypingIndicator(chatUid);
 });
 setTimeout(function(){
-if(isKnownChatContact(chatUid)||(window._spamAllowedCache&&window._spamAllowedCache[chatUid]===true))return;
+if(window._spamAllowedCache&&window._spamAllowedCache[chatUid]===true)return;
 canSendMessageTo(chatUid).then(function(allowed){
 if(!allowed)showNotification("This user has spam protection enabled.");
 });
@@ -3243,16 +3193,6 @@ currentChatUsername=name;
 var nameEl=document.getElementById("chatHeaderName");
 if(nameEl)nameEl.textContent=name;
 try{localStorage.setItem("username_"+chatUid,name);}catch(e){}
-var osEl=document.getElementById("chatHeaderStatus");
-if(osEl&&presenceData){
-var statusText=presenceData.online ? "Online" :(presenceData.lastSeen ? formatLastSeen(presenceData.lastSeen): "");
-osEl.textContent=statusText;
-try{localStorage.setItem("lastSeen_"+chatUid,statusText);}catch(e){}
-}else if(osEl){
-var cachedStatusNow="";
-try{cachedStatusNow=localStorage.getItem("lastSeen_"+chatUid)||"";}catch(e){}
-osEl.textContent=cachedStatusNow||"Offline";
-}
 if(profData&&profData.profilePic){
 var hPicEl=document.getElementById("chatHeaderAvatar");
 if(hPicEl)hPicEl.src=profData.profilePic;
@@ -3276,17 +3216,30 @@ try{localStorage.setItem("profilePic_"+chatUid,pic2);}catch(e){}
 });
 }
 });
-if(activeChatPresenceRef){try{activeChatPresenceRef.off();}catch(e){}activeChatPresenceRef=null;}
+if(window._chatHeaderPresenceCb&&activeChatPresenceRef){
+try{activeChatPresenceRef.off("value",window._chatHeaderPresenceCb);}catch(e){}
+}
 activeChatPresenceRef=db.ref("presence1/"+chatUid);
-activeChatPresenceRef.on("value",function(snap){
+if(typeof window._watchPresenceFor==="function")window._watchPresenceFor(chatUid);
+window._chatHeaderPresenceCb=function(snap){
 if(currentChatUid!==chatUid)return;
 var data=snap.val();
 var osEl=document.getElementById("chatHeaderStatus");
 var nameEl=document.getElementById("chatHeaderName");
 if(data){
+var nowOnline=isUserActuallyOnline(data);
+window._presenceCache=window._presenceCache||{};
+window._presenceCache[chatUid]=nowOnline;
+var listRow=window._getChatEl&&window._getChatEl(chatUid);
+if(listRow){
+listRow._isOnline=nowOnline;
+var knownU=window._chatLastKnownUnread&&window._chatLastKnownUnread[chatUid]||0;
+applyChatRowState(listRow,chatUid,knownU,nowOnline);
+}
 if(osEl){
-osEl.textContent=data.online ? "Online" :(data.lastSeen ? formatLastSeen(data.lastSeen): "");
-osEl.style.color=data.online ? "#22C55E" : "#90E0EF";
+osEl.textContent=presenceStatusText(data);
+osEl.style.color=nowOnline ? "#22C55E" : "#90E0EF";
+try{localStorage.setItem("lastSeen_"+chatUid,osEl.textContent);}catch(e){}
 }
 if(data.username&&nameEl){
 nameEl.textContent=data.username;
@@ -3297,7 +3250,7 @@ var cachedStatusFallback="";
 try{cachedStatusFallback=localStorage.getItem("lastSeen_"+chatUid)||"";}catch(e){}
 osEl.textContent=cachedStatusFallback||"Offline";
 }
-if(data&&data.online&&currentChatUid===chatUid){
+if(data&&isUserActuallyOnline(data)&&currentChatUid===chatUid){
 db.ref("conversations/"+uid+"/"+chatUid).orderByChild("status").equalTo("sent").once("value",function(undeliveredSnap){
 undeliveredSnap.forEach(function(msgSnap){
 if(msgSnap.val().from===uid){
@@ -3330,7 +3283,8 @@ if(sp){sp.textContent="✓✓";sp.className="message-status double-tick seen";}
 });
 }
 }
-});
+};
+activeChatPresenceRef.on("value",window._chatHeaderPresenceCb);
 isUserBlocked(chatUid,uid).then(function(blocked){
 isBlockedByUser=blocked;
 updateChatUI();
@@ -4980,6 +4934,7 @@ function hideActionContainer(){
 if(currentActionContainer){
 currentActionContainer.style.display="none";
 currentActionContainer=null;
+if(typeof window._forceRepaint==="function")window._forceRepaint();
 }
 }
 function addReaction(messageId,emoji){
@@ -5137,6 +5092,8 @@ window._chatListPresenceRefs={};
 }
 window._chatLastKnownUnread={};
 window._chatLastKnownTs={};
+window._fbUnreadCount={};
+window._spamAllowedCache={};
 var privateChatItems=document.querySelectorAll(".user.navItem[data-uid]");
 privateChatItems.forEach(function(el){
 var pUid=el.dataset.uid;
@@ -5224,6 +5181,20 @@ passwordInputLogin.value="";
 usernameInputSignUp.value="";
 passwordInputSignUp.value="";
 messageInput.value="";
+try{if(typeof window.authSubmitBusy!=="undefined")window.authSubmitBusy=false;}catch(e){}
+authSubmitBusy=false;
+if(window._loginResetTimer)try{clearTimeout(window._loginResetTimer);}catch(e){}
+if(typeof setAuthButtonsBusy==="function"){
+setAuthButtonsBusy("login",false,"","Login");
+setAuthButtonsBusy("signup",false,"","Create Account");
+}
+try{
+var lbv=document.getElementById("loginButtonVisible");
+if(lbv){lbv.disabled=false;lbv.style.opacity="1";lbv.textContent="Login";}
+var sbv=document.getElementById("signUpButtonVisible");
+if(sbv){sbv.disabled=false;sbv.style.opacity="1";sbv.textContent="Create Account";}
+if(typeof hideAuthLoading==="function")hideAuthLoading();
+}catch(e){}
 profileViewContainer.style.display="none";
 profileEditContainer.style.display="none";
 statusViewContainer.style.display="none";
@@ -6290,9 +6261,16 @@ if(closingChatUid){
 var closingRow=window._getChatEl(closingChatUid);
 if(closingRow)markMessagesAsSeen(closingChatUid,closingRow);
 }
-if(activeChatPresenceRef){try{activeChatPresenceRef.off();}catch(e){}activeChatPresenceRef=null;}
+if(window._chatHeaderPresenceCb&&activeChatPresenceRef){
+try{activeChatPresenceRef.off("value",window._chatHeaderPresenceCb);}catch(e){}
+}
+window._chatHeaderPresenceCb=null;
+activeChatPresenceRef=null;
+if(closingChatUid&&typeof window._watchPresenceFor==="function")window._watchPresenceFor(closingChatUid);
 var hStatusReset=document.getElementById("chatHeaderStatus");
-if(hStatusReset)hStatusReset.textContent="Loading...";
+if(hStatusReset)hStatusReset.textContent="";
+if(chatRef){try{chatRef.off();}catch(e){}chatRef=null;}
+if(otherChatRef){try{otherChatRef.off();}catch(e){}otherChatRef=null;}
 currentChatUid=null;
 currentOpenChatUid=null;
 var chatHeaderBack=document.getElementById("chatHeader");
@@ -6300,12 +6278,31 @@ if(chatHeaderBack){chatHeaderBack.style.display="none";chatHeaderBack.classList.
 chatPage.classList.remove("active");
 mainPage.classList.add("active");
 db.ref("presence1/"+uid).update({currentChat: null});
+if(closingChatUid){
+try{
+if(window._inboxListeners&&window._inboxListeners[closingChatUid]){
+try{window._inboxListeners[closingChatUid].off();}catch(e0){}
+delete window._inboxListeners[closingChatUid];
+}
+attachInboxListener(closingChatUid,currentChatUsername||closingChatUid);
+}catch(e){}
+try{
+if(typeof window._watchPresenceFor==="function")window._watchPresenceFor(closingChatUid);
+var row=window._getChatEl&&window._getChatEl(closingChatUid);
+if(row){
+var stillOnline=!!(window._presenceCache&&window._presenceCache[closingChatUid]);
+row._isOnline=stillOnline;
+applyChatRowState(row,closingChatUid,0,stillOnline);
+}
+}catch(e1){}
+}
 restoreTabBar();
 softkeyLeft.innerHTML="Options";
 softkeyCenter.innerHTML="";
 softkeyRight.innerHTML="Online";
 focusPrivateChatsLanding();
 if(typeof window.androidRestoreMainLayout==="function")window.androidRestoreMainLayout();
+if(typeof window.chitShowAppOpenAd==="function")setTimeout(window.chitShowAppOpenAd,400);
 }
 return;
 }
@@ -6331,36 +6328,31 @@ function canSendMessageTo(partnerUid){
 return new Promise(function(resolve){
 if(!partnerUid){resolve(true);return;}
 if(window._spamAllowedCache&&window._spamAllowedCache[partnerUid]===true){resolve(true);return;}
-if(window._spamAllowedCache&&window._spamAllowedCache[partnerUid]===false){resolve(false);return;}
 var settled=false;
 var timeoutId=setTimeout(function(){
 if(settled)return;
 settled=true;
-resolve(true);
-},2000);
+resolve(false);
+},4000);
 function done(ok){
 if(settled)return;
 settled=true;clearTimeout(timeoutId);
+if(ok){
 window._spamAllowedCache=window._spamAllowedCache||{};
-window._spamAllowedCache[partnerUid]=!!ok;
+window._spamAllowedCache[partnerUid]=true;
+}
 resolve(!!ok);
 }
 db.ref("privateChats/"+partnerUid+"/"+uid).once("value",function(theirListSnap){
 if(settled)return;
-var theyHaveMe=!!(theirListSnap&&theirListSnap.exists());
-db.ref("privateChats/"+uid+"/"+partnerUid).once("value",function(myListSnap){
-if(settled)return;
-var iHaveThem=!!(myListSnap&&myListSnap.exists());
-if(theyHaveMe&&iHaveThem){done(true);return;}
-if(theyHaveMe){done(true);return;}
+if(theirListSnap&&theirListSnap.exists()){done(true);return;}
 db.ref("profiles/"+partnerUid+"/spamProtection").once("value",function(snap){
 if(settled)return;
 var partnerSpamProtection=snap.val()||false;
 if(!partnerSpamProtection){done(true);return;}
 done(false);
-},function(){done(true);});
-},function(){done(true);});
-},function(){done(true);});
+},function(){done(false);});
+},function(){done(false);});
 });
 }
 function updateAllUnreadCounts(){
@@ -6373,25 +6365,18 @@ updateUserStatus(partnerUid,userElement);
 function updateUserStatus(partnerUid,userElement){
 db.ref("privateChats/"+uid+"/"+partnerUid).once("value",function(privateSnap){
 var privateEntry=privateSnap.val()||{};
-db.ref("presence1/"+partnerUid).once("value",function(snap){
-var presence=snap.val()||{};
-var isOnline=typeof privateEntry.online==="boolean" ? privateEntry.online : !!presence.online;
 var unreadCount=typeof privateEntry.unreadCount==="number" ? privateEntry.unreadCount : 0;
+var isOnline=!!(window._presenceCache&&window._presenceCache[partnerUid]);
 if(privateSnap.exists()){
 applyChatRowState(userElement,partnerUid,unreadCount,isOnline);
 return;
 }
-var chatRef=db.ref("conversations/"+uid+"/"+partnerUid);
-chatRef.once("value",function(chatSnapshot){
+db.ref("conversations/"+uid+"/"+partnerUid).orderByChild("timestamp").limitToLast(1).once("value",function(chatSnapshot){
+var lastMsg=null;
+chatSnapshot.forEach(function(msgSnapshot){lastMsg=msgSnapshot.val();});
 var legacyUnreadCount=0;
-chatSnapshot.forEach(function(msgSnapshot){
-var data=msgSnapshot.val();
-if(data.from===partnerUid&&!data.seen){
-legacyUnreadCount++;
-}
-});
+if(lastMsg&&lastMsg.from===partnerUid&&!lastMsg.seen&&!lastMsg.deleted)legacyUnreadCount=1;
 applyChatRowState(userElement,partnerUid,legacyUnreadCount,isOnline);
-});
 });
 });
 }
@@ -6767,6 +6752,7 @@ window.location.href="groups.html";
 }
 function showSimpleNotification(name,text,pic,chatUid,groupId){
 if(!areNotificationsEnabled())return;
+if(typeof sendPushNotification==="function")sendPushNotification(text,name,chatUid);
 if(window.notificationSound&&(typeof notificationSoundEnabled==="undefined"||notificationSoundEnabled)){
 try{
 window.notificationSound.currentTime=0;

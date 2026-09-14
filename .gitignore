@@ -1,0 +1,12 @@
+node_modules/
+platforms/
+www/
+plugins/android.json
+plugins/fetch.json
+.idea/
+*.apk
+*.aab
+*.keystore
+*.jks
+.DS_Store
+ChitChat-Android.zip
