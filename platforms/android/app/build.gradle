@@ -1,0 +1,22 @@
+apply plugin: 'com.android.application'
+
+android {
+    compileSdkVersion 34
+    
+    packagingOptions {
+        pickFirst 'lib/x86/libc++_shared.so'
+        pickFirst 'lib/x86_64/libc++_shared.so'
+        pickFirst 'lib/armeabi-v7a/libc++_shared.so'
+        pickFirst 'lib/arm64-v8a/libc++_shared.so'
+    }
+}
+
+dependencies {
+    // Exclude problematic play-services-base resource
+    implementation('com.google.android.gms:play-services-base:18.3.0') {
+        exclude group: 'com.google.android.gms', module: 'play-services-base'
+    }
+    
+    // Use a newer, more compatible version
+    implementation 'com.google.android.gms:play-services-ads:21.3.0'
+}
