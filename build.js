@@ -93,12 +93,19 @@ var cordova = hasBin("cordova") ? "cordova" : "npx cordova";
 if (!fs.existsSync(path.join(ROOT, "platforms", "android"))) {
   run(cordova + " platform add android");
 }
+
+// First prepare to generate cdv-gradle-config.json
+run(cordova + " prepare android");
+
 try {
   run(cordova + " plugin add vendor/admob-plus-cordova --variable APP_ID_ANDROID=ca-app-pub-4672720627282510~8007823774 --save");
 } catch (e) {
   console.log("plugin add skipped (may already exist):", e.message);
 }
+
+// Prepare again after plugin add
 run(cordova + " prepare android");
+
 if (wantApk) {
   run(cordova + " build android");
   console.log("APK under platforms/android/app/build/outputs/apk/");
