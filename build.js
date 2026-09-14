@@ -90,23 +90,41 @@ if (!wantPrepare) {
 }
 
 var cordova = hasBin("cordova") ? "cordova" : "npx cordova";
-if (!fs.existsSync(path.join(ROOT, "platforms", "android"))) {
-  run(cordova + " platform add android");
+var androidPath = path.join(ROOT, "platforms", "android");
+
+// Clean remove if exists
+if (fs.existsSync(androidPath)) {
+  console.log("Removing existing android platform...");
+  try {
+    run(cordova + " platform remove android");
+  } catch (e) {
+    console.log("Remove platform warning:", e.message);
+    rmDir(androidPath);
+  }
 }
 
-// First prepare to generate cdv-gradle-config.json
+// Add fresh platform with gradle
+console.log("Adding android platform with gradle...");
+run(cordova + " platform add android@13");
+
+// Prepare to generate cdv-gradle-config.json
+console.log("Preparing android platform...");
 run(cordova + " prepare android");
 
+// Add plugin after prepare
+console.log("Adding admob plugin...");
 try {
   run(cordova + " plugin add vendor/admob-plus-cordova --variable APP_ID_ANDROID=ca-app-pub-4672720627282510~8007823774 --save");
 } catch (e) {
-  console.log("plugin add skipped (may already exist):", e.message);
+  console.log("Plugin add warning:", e.message);
 }
 
-// Prepare again after plugin add
+// Final prepare after plugin
+console.log("Final prepare after plugin...");
 run(cordova + " prepare android");
 
 if (wantApk) {
+  console.log("Building APK...");
   run(cordova + " build android");
   console.log("APK under platforms/android/app/build/outputs/apk/");
 }
