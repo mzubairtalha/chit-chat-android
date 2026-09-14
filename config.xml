@@ -18,6 +18,7 @@
     <preference name="GradlePluginKotlinEnabled" value="true" />
     <preference name="GradlePluginKotlinVersion" value="1.9.24" />
     <preference name="AndroidWindowSplashScreenAnimatedIcon" value="icons/icon112x112.png" />
+    <preference name="AndroidWindowSplashScreenBackground" value="#FFF0F4F8" />
     <preference name="AndroidPersistentFileLocation" value="Compatibility" />
     <platform name="android">
         <preference name="AndroidInsecureFileModeEnabled" value="true" />
