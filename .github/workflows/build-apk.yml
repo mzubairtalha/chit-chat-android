@@ -31,7 +31,7 @@ jobs:
         run: yes | sdkmanager --licenses || true
 
       - name: Install npm packages
-        run: npm install
+        run: npm install --ignore-scripts
 
       - name: Build debug APK
         env:

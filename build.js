@@ -90,17 +90,14 @@ if (!wantPrepare) {
 }
 
 var cordova = hasBin("cordova") ? "cordova" : "npx cordova";
-function tryRun(cmd) {
-  try {
-    run(cmd);
-  } catch (e) {
-    console.log("skip:", cmd, e.message);
-  }
-}
 if (!fs.existsSync(path.join(ROOT, "platforms", "android"))) {
-  tryRun(cordova + " platform add android");
+  run(cordova + " platform add android");
 }
-tryRun(cordova + " plugin add plugins/admob-plus-cordova --variable APP_ID_ANDROID=ca-app-pub-4672720627282510~8007823774 --save");
+try {
+  run(cordova + " plugin add plugins/admob-plus-cordova --variable APP_ID_ANDROID=ca-app-pub-4672720627282510~8007823774 --save");
+} catch (e) {
+  console.log("plugin add skipped (may already exist):", e.message);
+}
 run(cordova + " prepare android");
 if (wantApk) {
   run(cordova + " build android");
