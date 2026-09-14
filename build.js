@@ -77,7 +77,7 @@ COPY_DIRS.forEach(function (d) {
 if (!skipZip) {
   var zipOut = path.join(ROOT, "ChitChat-Android.zip");
   try {
-    run("zip -r \"" + zipOut + "\" index.html world_chat.html groups.html sw.js GUIDE.md notification.mp3 icons js plugins package.json config.xml build.js .gitignore .github -x \"*.git*\" -x \"*/node_modules/*\"");
+    run("zip -r \"" + zipOut + "\" index.html world_chat.html groups.html sw.js GUIDE.md notification.mp3 icons js vendor package.json config.xml build.js .gitignore .github -x \"*.git*\" -x \"*/node_modules/*\"");
     console.log("ZIP ready:", zipOut);
   } catch (e) {
     console.log("ZIP step skipped:", e.message);
@@ -94,7 +94,7 @@ if (!fs.existsSync(path.join(ROOT, "platforms", "android"))) {
   run(cordova + " platform add android");
 }
 try {
-  run(cordova + " plugin add plugins/admob-plus-cordova --variable APP_ID_ANDROID=ca-app-pub-4672720627282510~8007823774 --save");
+  run(cordova + " plugin add vendor/admob-plus-cordova --variable APP_ID_ANDROID=ca-app-pub-4672720627282510~8007823774 --save");
 } catch (e) {
   console.log("plugin add skipped (may already exist):", e.message);
 }
