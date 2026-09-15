@@ -21,7 +21,7 @@
     <preference name="AndroidWindowSplashScreenBackground" value="#FFF0F4F8" />
     <preference name="AndroidPersistentFileLocation" value="Compatibility" />
     <platform name="android">
-        <preference name="AndroidInsecureFileModeEnabled" value="true" />
+        <preference name="scheme" value="https" />
         <icon src="icons/icon56x56.png" />
         <icon density="ldpi" src="icons/icon56x56.png" />
         <icon density="mdpi" src="icons/icon56x56.png" />
