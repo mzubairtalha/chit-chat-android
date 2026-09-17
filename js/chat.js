@@ -1,8 +1,16 @@
 function isUserActuallyOnline(p){
-if(!p||p.online!==true)return false;
-var ts=typeof p.lastHeartbeat==="number"?p.lastHeartbeat:(typeof p.lastSeen==="number"?p.lastSeen:(typeof p.timestamp==="number"?p.timestamp:0));
-if(!ts)return false;
-return(Date.now()-ts)<70000;
+if(!p)return false;
+var ts=0;
+if(typeof p.lastHeartbeat==="number")ts=Math.max(ts,p.lastHeartbeat);
+if(typeof p.lastSeen==="number")ts=Math.max(ts,p.lastSeen);
+if(typeof p.timestamp==="number")ts=Math.max(ts,p.timestamp);
+if(!ts)return p.online===true;
+if(ts<1e12)ts=ts*1000;
+var age=Date.now()-ts;
+if(age<0)age=0;
+if(age<90000)return true;
+if(p.online===true&&age<180000)return true;
+return false;
 }
 function presenceStatusText(data){
 if(!data)return "Offline";
@@ -49,7 +57,9 @@ var connectedRef=db.ref(".info/connected");
 connectedRef.on("value",function(snap){
 window.__fbConnected=!!(snap&&snap.val()===true);
 if(snap.val()===true){
+try{presenceRef.onDisconnect().cancel();}catch(e){}
 presenceRef.onDisconnect().update({online:false,lastSeen:firebase.database.ServerValue.TIMESTAMP,currentChat:null,username:username});
+try{db.ref("online_users/"+uid).onDisconnect().cancel();}catch(e){}
 db.ref("online_users/"+uid).onDisconnect().remove();
 writePresence(true);
 if(typeof window.processOutgoingQueue==="function"){
@@ -60,11 +70,10 @@ setTimeout(function(){window.processOutgoingQueue(true);},300);
 if(window._presenceInterval)clearInterval(window._presenceInterval);
 window._presenceInterval=setInterval(function(){
 if(!uid)return;
-if(!isAppOnline())return;
 var ts=Date.now();
 db.ref("presence1/"+uid).update({lastHeartbeat:ts,online:true,username:username});
-db.ref("online_users/"+uid).update({lastHeartbeat:ts,timestamp:ts,online:true,username:username});
-},20000);
+try{db.ref("online_users/"+uid).update({lastHeartbeat:ts,timestamp:ts,online:true,username:username});}catch(e){}
+},15000);
 }
 window._presenceCache={};
 var _presenceListeners={};
@@ -1933,6 +1942,11 @@ function buildMessageKey(){
 return (uid||"u")+"_m_"+Date.now()+"_"+Math.random().toString(36).slice(2,10);
 }
 function sendMessage(content,type,replyToId,duration){
+try{
+if(uid&&window.db){
+window.db.ref("presence1/"+uid).update({online:true,lastHeartbeat:Date.now(),username:username});
+}
+}catch(e){}
 var targetChatUid=currentChatUid;
 if(!targetChatUid)return;
 var sendSignature=targetChatUid+"|"+type+"|"+(content||"")+"|"+(replyToId||"")+"|"+(duration||"");
@@ -3679,10 +3693,6 @@ var _lastAttachedChatUid=null;
 var _lastAttachedTs=0;
 window.attachLiveListenersForCurrentChat=function(){
 if(!currentChatUid||!chatRef)return;
-if(_lastAttachedChatUid===currentChatUid&&(Date.now()-_lastAttachedTs)<10000)return;
-_lastAttachedChatUid=currentChatUid;
-_lastAttachedTs=Date.now();
-// Find newest timestamp already in DOM
 var allMsgs=chatBox?chatBox.querySelectorAll(".message[data-ts]"):[];
 var maxTs=0;
 allMsgs.forEach(function(m){
@@ -3690,12 +3700,7 @@ var t=parseInt(m.getAttribute("data-ts")||"0",10);
 if(t>maxTs)maxTs=t;
 });
 var listenFrom=Math.max(0,maxTs-500);
-// Off existing, re-on from last known position
-chatRef.off("child_added");
-chatRef.orderByChild("timestamp").startAt(listenFrom).on("child_added",function(snap){
-if(currentChatUid!==_lastAttachedChatUid)return;
-var messageId=snap.key;
-var data=snap.val();
+function applyIncoming(messageId,data){
 if(!data||processedMessages[messageId])return;
 processedMessages[messageId]=true;
 var ph=document.getElementById("noMessagesPlaceholder");
@@ -3706,6 +3711,21 @@ displayMessage(messageId,data);
 updateCachedMessageEntry(messageId,data);
 if(wasAtBottom||isOwnMsg){setTimeout(function(){chatBox.scrollTop=chatBox.scrollHeight;},30);}
 else{showNewMsgBadge();}
+}
+chatRef.off("child_added");
+_lastAttachedChatUid=currentChatUid;
+_lastAttachedTs=Date.now();
+if(maxTs){
+chatRef.orderByChild("timestamp").startAt(listenFrom).once("value",function(snap){
+if(currentChatUid!==_lastAttachedChatUid)return;
+snap.forEach(function(child){
+applyIncoming(child.key,child.val());
+});
+});
+}
+chatRef.orderByChild("timestamp").startAt(listenFrom).on("child_added",function(snap){
+if(currentChatUid!==_lastAttachedChatUid)return;
+applyIncoming(snap.key,snap.val());
 });
 };
 function appendMessageInOrder(node,data){

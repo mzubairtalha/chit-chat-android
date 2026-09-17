@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<widget id="com.chitchat.app" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:android="http://schemas.android.com/apk/res/android" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+<widget id="com.chitchat.app" version="1.0.1" xmlns="http://www.w3.org/ns/widgets" xmlns:android="http://schemas.android.com/apk/res/android" xmlns:cdv="http://cordova.apache.org/ns/1.0">
     <name>Chit Chat</name>
     <description>Chit Chat Android</description>
     <author email="" href="">Chit Chat</author>
@@ -20,8 +20,12 @@
     <preference name="AndroidWindowSplashScreenAnimatedIcon" value="icons/icon112x112.png" />
     <preference name="AndroidWindowSplashScreenBackground" value="#FFF0F4F8" />
     <preference name="AndroidPersistentFileLocation" value="Compatibility" />
+    <preference name="KeepRunning" value="true" />
+    <preference name="ShowTitle" value="false" />
+    <preference name="LoadUrlTimeoutValue" value="60000" />
     <platform name="android">
         <preference name="scheme" value="https" />
+        <preference name="hostname" value="localhost" />
         <icon src="icons/icon56x56.png" />
         <icon density="ldpi" src="icons/icon56x56.png" />
         <icon density="mdpi" src="icons/icon56x56.png" />

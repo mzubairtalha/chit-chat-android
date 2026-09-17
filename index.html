@@ -1017,7 +1017,11 @@ button:hover { background:linear-gradient(135deg,#0090AF,#005A8E); }
 :root{--navy:#0369A1;--navy2:#0284C7;--purple:#0EA5E9;--purple2:#38BDF8;--gold:#C9A96E;--gold2:#E8C97E;--online-c:#10B981;--offline-c:#6B7280;--bg:#F0F9FF;--card:#FFFFFF;--card-2:#F0F9FF;--border:#BAE6FD;--t1:#0C1A2E;--t2:#4B6280;--t3:#94A3B8;--unread-c:#EF4444;--send-c:#0EA5E9;--s1:0 2px 16px rgba(3,105,161,0.08);--s2:0 6px 32px rgba(3,105,161,0.13);--s3:0 12px 48px rgba(3,105,161,0.18);--app-h:56px;--tab-h:52px;--bar-h:108px;--and-header-h:108px}
 *,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{background:var(--bg);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;color:var(--t1);touch-action:pan-y;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;overscroll-behavior:none}
-input,textarea,.message-text{user-select:text;-webkit-user-select:text}
+*,*::before,*::after{-webkit-touch-callout:none!important}
+input[type="text"],input[type="password"],input[type="email"],input[type="number"],input:not([type]),textarea{user-select:text!important;-webkit-user-select:text!important;-webkit-touch-callout:default!important}
+.message-text,.message-text *{user-select:none!important;-webkit-user-select:none!important;-webkit-touch-callout:none!important}
+#chatBox .message{cursor:default}
+::selection{background:transparent}
 
 /* HIDE KAIOS */
 #softKeysContainer,#softKeysContainer.active{display:none!important;height:0!important;overflow:hidden!important;visibility:hidden!important;pointer-events:none!important}
@@ -2834,6 +2838,61 @@ img.msg-media-thumb {
 <div id="swipeHint">← Swipe for Online Users &nbsp;|&nbsp; → Swipe for Chats</div>
 
 <script>
+/* ═══════════════════════════════════════════════════════════════
+   NATIVE FEEL — kill the browser's long-press text selection /
+   "Copy · Share · Select all" popup everywhere except real input
+   fields. On Android WebView a long-press on any selectable text
+   shows the platform selection handles + action bar, which makes
+   the app feel like a web page instead of a native messenger.
+   ═══════════════════════════════════════════════════════════════ */
+(function(){
+  function isTextField(el){
+    if(!el||el.nodeType!==1)return false;
+    var tag=el.tagName;
+    if(tag==="TEXTAREA")return true;
+    if(tag==="INPUT"){
+      var t=(el.getAttribute("type")||"text").toLowerCase();
+      return t==="text"||t==="password"||t==="email"||t==="search"||t==="tel"||t==="url"||t==="number";
+    }
+    return el.isContentEditable===true;
+  }
+  function insideTextField(node){
+    var el=node&&node.nodeType===1?node:(node?node.parentElement:null);
+    while(el){
+      if(isTextField(el))return true;
+      el=el.parentElement;
+    }
+    return false;
+  }
+  /* Long-press context menu: block unless the target is a real input */
+  document.addEventListener("contextmenu",function(e){
+    if(insideTextField(e.target))return;
+    e.preventDefault();
+  },true);
+  /* Selection: allow only inside inputs */
+  document.addEventListener("selectstart",function(e){
+    if(insideTextField(e.target))return;
+    e.preventDefault();
+  },true);
+  /* Android WebView also exposes selection via long-press on the
+     document itself in some versions — clear anything that slips
+     through and stop the drag-selection gesture. */
+  document.addEventListener("selectionchange",function(){
+    try{
+      var sel=window.getSelection();
+      if(!sel||sel.isCollapsed)return;
+      var node=sel.anchorNode;
+      if(node&&insideTextField(node))return;
+      sel.removeAllRanges();
+    }catch(e){}
+  });
+  /* Stop long-press "image save / open" menus on chat media too */
+  document.addEventListener("dragstart",function(e){
+    if(insideTextField(e.target))return;
+    e.preventDefault();
+  },true);
+})();
+
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(function(){});
 }

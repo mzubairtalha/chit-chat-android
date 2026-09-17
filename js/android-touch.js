@@ -1371,15 +1371,6 @@
         try {
           if (typeof window.processOutgoingQueue === 'function') window.processOutgoingQueue(true);
         } catch (e) {}
-        try {
-          if (window._inboxListeners) {
-            Object.keys(window._inboxListeners).forEach(function (pid) {
-              try { window._inboxListeners[pid].off(); } catch (e) {}
-              delete window._inboxListeners[pid];
-              if (typeof attachInboxListener === 'function') attachInboxListener(pid);
-            });
-          }
-        } catch (e) {}
         if (typeof window.attachLiveListenersForCurrentChat === 'function') {
           window.attachLiveListenersForCurrentChat();
         }
@@ -1404,20 +1395,42 @@
           if (window.__onlineUsersLoaded && !window.__onlineUsersReady && typeof window.loadOnlineUsers === 'function') window.loadOnlineUsers();
         } catch (e) {}
         try {
-          /* Catch missed messages/unread on the chat LIST after returning
-             (skip when a conversation is already open in front of it). */
-          var cp = document.getElementById('chatPage');
-          var inOpenChat = cp && cp.classList.contains('active');
-          if (!inOpenChat) forceChatListResync();
+          forceChatListResync();
         } catch (e) {}
         startKA();
       }, 250);
     }
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden || document.visibilityState === 'hidden') return;
+      if (document.hidden || document.visibilityState === 'hidden') {
+        try {
+          if (window.db && window.uid) {
+            window.db.ref('presence1/' + window.uid).update({
+              online: true,
+              lastHeartbeat: Date.now(),
+              username: window.username || undefined
+            });
+          }
+        } catch (e) {}
+        return;
+      }
       window.__skipSyncBanner = true;
       _onForeground();
     });
+    document.addEventListener('pause', function () {
+      try {
+        if (window.db && window.uid) {
+          window.db.ref('presence1/' + window.uid).update({
+            online: true,
+            lastHeartbeat: Date.now(),
+            username: window.username || undefined
+          });
+        }
+      } catch (e) {}
+    }, false);
+    document.addEventListener('resume', function () {
+      window.__skipSyncBanner = true;
+      _onForeground();
+    }, false);
 
     /* Network reconnect */
     window.addEventListener('online', function () {
