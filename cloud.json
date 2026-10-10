@@ -1,1 +1,10 @@
-
+{
+  "clouds": [
+    { "cloud": "dntrjixuc", "preset": "ml_default" },
+    { "cloud": "lhltyz9t", "preset": "chit chat" },
+    { "cloud": "ljoceldl", "preset": "chit chat" },
+    { "cloud": "jj63rmzd", "preset": "chit chat" },
+    { "cloud": "cwirgeba", "preset": "chit chat" },
+    { "cloud": "k3x1oahr", "preset": "chit chat" }
+  ]
+}
